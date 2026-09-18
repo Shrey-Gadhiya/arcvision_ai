@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.env
+.venv
+*.sqlite
+*.sqlite3
+*.db
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Large media & model weights
+*.mp4
+*.avi
+*.mkv
+*.pt
+backend/data/
+backend/recordings/
+backend/uploads/
+backend/snapshots/
+data/
+recordings/
+uploads/

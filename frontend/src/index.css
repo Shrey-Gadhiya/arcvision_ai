@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --color-vms-bg: #000000;
+  --color-vms-surface: #09090b;
+  --color-vms-panel: #121215;
+  --color-vms-panel-hover: #1c1c20;
+  --color-vms-border: #27272a;
+  --color-vms-border-subtle: #18181b;
+  --color-vms-accent: #ffffff;
+  --color-vms-accent-hover: #e4e4e7;
+  --color-vms-text: #ffffff;
+  --color-vms-muted: #a1a1aa;
+  --color-vms-subtle: #71717a;
+  
+  --color-vms-critical: #ffffff;
+  --color-vms-critical-bg: #27272a;
+  --color-vms-warning: #e4e4e7;
+  --color-vms-warning-bg: #18181b;
+  --color-vms-success: #ffffff;
+  --color-vms-success-bg: #27272a;
+  --color-vms-info: #d4d4d8;
+  --color-vms-info-bg: #18181b;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-vms-bg);
+  color: var(--color-vms-text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Precise monochromatic tactical scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Mono numbers for tables & telemetry */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle focus ring */
+*:focus-visible {
+  outline: 1px solid #ffffff;
+  outline-offset: 1px;
+}

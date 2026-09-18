@@ -1,0 +1,106 @@
+import axios from 'axios';
+
+const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location) {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:8000`;
+  }
+  return 'http://localhost:8000';
+};
+
+export const API_BASE_URL = getApiBaseUrl();
+export const API_V1 = `${API_BASE_URL}/api/v1`;
+
+export const getMediaUrl = (path?: string): string => {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('blob:')) {
+    return path;
+  }
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${cleanPath}`;
+};
+
+export const apiClient = axios.create({
+  baseURL: API_V1,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('arc_token');
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  if (config.data instanceof FormData && config.headers) {
+    delete config.headers['Content-Type'];
+  }
+  return config;
+});
+
+// WebSocket Real-time Listener
+type EventHandler = (payload: any) => void;
+
+class WebSocketManager {
+  private ws: WebSocket | null = null;
+  private handlers: Map<string, Set<EventHandler>> = new Map();
+  private reconnectInterval: any = null;
+
+  connect() {
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : 'localhost';
+    const wsUrl = `${wsProtocol}//${hostname}:8000/ws`;
+    this.ws = new WebSocket(wsUrl);
+
+    this.ws.onopen = () => {
+      console.log('[ARC VISION WS] Connected to tactical command server');
+      if (this.reconnectInterval) {
+        clearInterval(this.reconnectInterval);
+        this.reconnectInterval = null;
+      }
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        const topic = message.topic;
+        if (topic && this.handlers.has(topic)) {
+          this.handlers.get(topic)?.forEach((handler) => handler(message.data));
+        }
+        if (this.handlers.has('*')) {
+          this.handlers.get('*')?.forEach((handler) => handler(message));
+        }
+      } catch (e) {
+        // console.error('[WS Parse Error]', e);
+      }
+    };
+
+    this.ws.onclose = () => {
+      if (!this.reconnectInterval) {
+        this.reconnectInterval = setInterval(() => {
+          this.connect();
+        }, 3000);
+      }
+    };
+
+    this.ws.onerror = () => {
+      this.ws?.close();
+    };
+  }
+
+  on(topic: string, handler: EventHandler) {
+    if (!this.handlers.has(topic)) {
+      this.handlers.set(topic, new Set());
+    }
+    this.handlers.get(topic)?.add(handler);
+    return () => {
+      this.handlers.get(topic)?.delete(handler);
+    };
+  }
+}
+
+export const wsManager = new WebSocketManager();

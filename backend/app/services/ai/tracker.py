@@ -80,6 +80,39 @@ class TrackedObject:
         net_disp = math.hypot(curr_cx - oldest_cx, curr_cy - oldest_cy)
         return net_disp < 0.04
 
+    def predict(self, dt: float) -> Detection:
+        """Projects bounding box and centroid forward based on velocity vector for smooth 30 FPS playback."""
+        # Clamp extrapolation delta to prevent overshoot on stops
+        dt_clamped = min(0.6, max(0.0, dt))
+        dx = self.velocity[0] * dt_clamped
+        dy = self.velocity[1] * dt_clamped
+        
+        dx = max(-0.06, min(0.06, dx))
+        dy = max(-0.06, min(0.06, dy))
+
+        x1 = max(0.0, min(0.98, self.box[0] + dx))
+        y1 = max(0.0, min(0.98, self.box[1] + dy))
+        x2 = max(x1 + 0.02, min(1.0, self.box[2] + dx))
+        y2 = max(y1 + 0.02, min(1.0, self.box[3] + dy))
+
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        return Detection(
+            class_name=self.class_name,
+            confidence=self.confidence,
+            box=[x1, y1, x2, y2],
+            track_id=self.track_id,
+            attributes={
+                "centroid": (cx, cy),
+                "velocity": self.velocity,
+                "dwell_sec": round(self.dwell_duration, 1),
+                "is_stationary": self.is_stationary,
+                "pacing_count": self.direction_reversals,
+                "trajectory": [(round(p[0], 3), round(p[1], 3)) for p in self.trajectory[-15:]]
+            }
+        )
+
     def to_detection(self) -> Detection:
         return Detection(
             class_name=self.class_name,
@@ -167,3 +200,11 @@ class MultiObjectTracker:
             if track.missed_frames == 0:
                 result.append(track.to_detection())
         return result
+
+    def predict_all(self, dt: float) -> List[Detection]:
+        """Returns forward-projected detections for intermediate frames between detector updates."""
+        res: List[Detection] = []
+        for track in self.tracks.values():
+            if track.missed_frames <= 2:
+                res.append(track.predict(dt))
+        return res

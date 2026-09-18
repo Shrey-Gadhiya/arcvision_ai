@@ -90,6 +90,13 @@ class CameraStreamer:
         self._lock = threading.Lock()
 
     def _dispatch_task(self, coro):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+            return
+        except RuntimeError:
+            pass
+
         async def _safe_runner():
             try:
                 await coro
@@ -654,19 +661,9 @@ class CameraStreamer:
                 if obs_list:
                     self._dispatch_task(self._ingest_cross_camera_task(obs_list))
 
-            # 7. Render 100% Frame-Synchronized Tactical Overlay on the exact processed frame
-            annotated = self._annotate_frame(frame, tracked)
-            ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
-            ret_raw, jpeg_raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
-
+            self._last_inference_time = time.time()
             with self._lock:
                 self.latest_detections = tracked
-                self.latest_frame = frame
-                self.latest_annotated_frame = annotated
-                if ret_ann:
-                    self.latest_jpeg_bytes = jpeg_ann.tobytes()
-                if ret_raw:
-                    self.latest_raw_jpeg_bytes = jpeg_raw.tobytes()
 
         except Exception as ex:
             logger.error(f"Inference error in Cam #{self.camera_id}: {ex}")
@@ -717,11 +714,6 @@ class CameraStreamer:
                     time.sleep(0.05)
                     continue
 
-                # Pace the streamer with the AI inference pipeline to eliminate outline desynchronization
-                if not self._inference_queue.empty():
-                    time.sleep(0.01)
-                    continue
-
                 ret, frame = cap.read()
 
                 if not ret or frame is None:
@@ -757,18 +749,46 @@ class CameraStreamer:
                 frames_in_second += 1
                 self.last_frame_time = time.time()
 
-                # Buffer for recording and evidence
+                # 1. Real-time velocity extrapolation on intermediate frames for 25-30 FPS smoothness
+                dt = time.time() - getattr(self, "_last_inference_time", time.time())
+                if dt > 0.02 and self.tracker.tracks:
+                    current_detections = self.tracker.predict_all(dt)
+                else:
+                    with self._lock:
+                        current_detections = list(self.latest_detections)
+
+                # Attach cached plate/face attributes
+                for det in current_detections:
+                    cached_p = self._vehicle_plate_cache.get(det.track_id)
+                    if cached_p:
+                        det.attributes["plate"] = cached_p.get("plate")
+                        det.attributes["plate_box"] = cached_p.get("plate_box")
+                        det.attributes["is_matched"] = cached_p.get("is_matched", False)
+                        det.attributes["watchlist_category"] = cached_p.get("watchlist_category")
+
+                annotated = self._annotate_frame(frame, current_detections)
+                ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
+                ret_raw, jpeg_raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+
+                with self._lock:
+                    self.latest_frame = frame
+                    self.latest_annotated_frame = annotated
+                    if ret_ann:
+                        self.latest_jpeg_bytes = jpeg_ann.tobytes()
+                    if ret_raw:
+                        self.latest_raw_jpeg_bytes = jpeg_raw.tobytes()
+
+                # 2. Buffer for recording and evidence
                 evidence_manager.buffer_frame(self.camera_id, frame)
 
-                # Feed AI worker queue with exact frame
+                # 3. Feed background AI worker queue
                 try:
-                    self._inference_queue.put_nowait((frame, self.frame_count))
+                    if self._inference_queue.empty():
+                        self._inference_queue.put_nowait((frame, self.frame_count))
                 except Exception:
                     pass
 
-                # Continuous Recording feed
-                with self._lock:
-                    current_detections = list(self.latest_detections)
+                # 4. Continuous Recording feed
                 detected_classes = [d.class_name for d in current_detections]
                 seg_meta = recording_engine.feed_frame(
                     camera_id=self.camera_id,
@@ -794,7 +814,7 @@ class CameraStreamer:
                 actual_delta = time.time() - loop_start
                 self.latency_ms = round(actual_delta * 1000.0, 1)
 
-                # Throttle to target FPS
+                # Throttle to smooth target FPS
                 elapsed = time.time() - loop_start
                 sleep_time = max(0.001, frame_delay - elapsed)
                 time.sleep(sleep_time)

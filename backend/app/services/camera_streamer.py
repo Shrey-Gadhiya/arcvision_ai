@@ -654,9 +654,19 @@ class CameraStreamer:
                 if obs_list:
                     self._dispatch_task(self._ingest_cross_camera_task(obs_list))
 
-            # Update tracked detections safely
+            # 7. Render 100% Frame-Synchronized Tactical Overlay on the exact processed frame
+            annotated = self._annotate_frame(frame, tracked)
+            ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            ret_raw, jpeg_raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+
             with self._lock:
                 self.latest_detections = tracked
+                self.latest_frame = frame
+                self.latest_annotated_frame = annotated
+                if ret_ann:
+                    self.latest_jpeg_bytes = jpeg_ann.tobytes()
+                if ret_raw:
+                    self.latest_raw_jpeg_bytes = jpeg_raw.tobytes()
 
         except Exception as ex:
             logger.error(f"Inference error in Cam #{self.camera_id}: {ex}")
@@ -707,6 +717,11 @@ class CameraStreamer:
                     time.sleep(0.05)
                     continue
 
+                # Pace the streamer with the AI inference pipeline to eliminate outline desynchronization
+                if not self._inference_queue.empty():
+                    time.sleep(0.01)
+                    continue
+
                 ret, frame = cap.read()
 
                 if not ret or frame is None:
@@ -742,26 +757,18 @@ class CameraStreamer:
                 frames_in_second += 1
                 self.last_frame_time = time.time()
 
-                # 1. Immediately annotate and pre-encode JPEG in streamer thread
-                with self._lock:
-                    current_detections = list(self.latest_detections)
-                
-                annotated = self._annotate_frame(frame, current_detections)
-                ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
-                ret_raw, jpeg_raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
-
-                with self._lock:
-                    self.latest_frame = frame
-                    self.latest_annotated_frame = annotated
-                    if ret_ann:
-                        self.latest_jpeg_bytes = jpeg_ann.tobytes()
-                    if ret_raw:
-                        self.latest_raw_jpeg_bytes = jpeg_raw.tobytes()
-
-                # 2. Buffer for recording and evidence
+                # Buffer for recording and evidence
                 evidence_manager.buffer_frame(self.camera_id, frame)
 
-                # 3. Continuous Recording feed (Async Segment Writing)
+                # Feed AI worker queue with exact frame
+                try:
+                    self._inference_queue.put_nowait((frame, self.frame_count))
+                except Exception:
+                    pass
+
+                # Continuous Recording feed
+                with self._lock:
+                    current_detections = list(self.latest_detections)
                 detected_classes = [d.class_name for d in current_detections]
                 seg_meta = recording_engine.feed_frame(
                     camera_id=self.camera_id,
@@ -775,13 +782,6 @@ class CameraStreamer:
                 )
                 if seg_meta:
                     threading.Thread(target=self._async_write_segment, args=(seg_meta,), daemon=True).start()
-
-                # 4. Feed dedicated AI worker queue (Zero dynamic thread creation)
-                try:
-                    if self._inference_queue.empty():
-                        self._inference_queue.put_nowait((frame, self.frame_count))
-                except Exception:
-                    pass
 
                 # Calculate FPS
                 now = time.time()

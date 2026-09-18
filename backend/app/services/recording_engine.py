@@ -62,7 +62,16 @@ class CameraSegmentBuffer:
             if self.segment_start_time is None:
                 self.segment_start_time = now
 
-            self.frames.append(frame.copy())
+            # Downscale frame for segment buffer (854px max) to prevent memory exhaustion
+            h, w = frame.shape[:2]
+            if w > 854:
+                scale_w = 854
+                scale_h = int(854 * h / w)
+                rec_frame = cv2.resize(frame, (scale_w, scale_h))
+            else:
+                rec_frame = frame.copy()
+
+            self.frames.append(rec_frame)
             if has_objects:
                 self.has_objects = True
             if detected_classes:

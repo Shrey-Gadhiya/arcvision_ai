@@ -43,7 +43,7 @@ from app.services.notification_service import notification_service
 logger = logging.getLogger("arc_vision.anpr.service")
 
 # Recognizable vehicle classes
-VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "vehicle", "van", "auto", "train"}
+VEHICLE_CLASSES = {"car", "motorcycle", "bike", "motorbike", "scooter", "bus", "truck", "bicycle", "vehicle", "van", "auto", "train"}
 
 class PlateRecognitionService:
     """
@@ -393,7 +393,8 @@ class PlateRecognitionService:
         full_frame: Optional[np.ndarray] = None,
         dwell_duration_sec: float = 0.0,
         is_stationary: bool = False,
-        recording_segment_id: Optional[int] = None
+        recording_segment_id: Optional[int] = None,
+        precomputed_plate_data: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Executes complete ANPR & Vehicle Intelligence flow for a vehicle sighting.
@@ -414,12 +415,17 @@ class PlateRecognitionService:
 
         self._track_cooldown[(camera_id, track_id)] = now
 
-        # 2. Localize Plate & Run OCR
+        # 2. Localize Plate & Run OCR (Use precomputed if available)
         raw_text = ""
         ocr_confidence = 0.0
         plate_crop = None
 
-        if isinstance(self.ocr_adapter, EasyOCRPlateAdapter) and self.ocr_adapter.status == AdapterStatus.LOADED:
+        if precomputed_plate_data:
+            raw_text = precomputed_plate_data.get("raw_text") or precomputed_plate_data.get("cleaned_text") or ""
+            ocr_confidence = float(precomputed_plate_data.get("confidence", 0.85))
+            plate_crop = precomputed_plate_data.get("plate_crop")
+
+        if not raw_text and isinstance(self.ocr_adapter, EasyOCRPlateAdapter) and self.ocr_adapter.status == AdapterStatus.LOADED:
             det_res = self.ocr_adapter.detect_and_read_from_frame(vehicle_crop)
             if det_res:
                 raw_text = det_res.get("raw_text", "")

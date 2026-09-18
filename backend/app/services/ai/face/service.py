@@ -511,27 +511,74 @@ class FaceRecognitionService:
         if frame is None or frame.size == 0:
             return []
 
-        # 1. Detect faces (Neural YuNet or OpenCV Cascade Fallback)
-        detections = []
-        if self.detector_adapter.status == AdapterStatus.LOADED:
-            detections = self.detector_adapter.detect_faces(frame, confidence_threshold=0.40)
-        
+        # 1. Detect faces: Prioritize Person Tracks with Head ROI localization + YuNet/Haar
+        detections: List[FaceDetectionResult] = []
+        img_h, img_w = frame.shape[:2]
+
+        if person_tracks:
+            for trk in person_tracks:
+                pbox = trk.get("box")
+                if not pbox or len(pbox) < 4:
+                    continue
+                px1 = max(0, int(pbox[0] * img_w))
+                py1 = max(0, int(pbox[1] * img_h))
+                px2 = min(img_w, int(pbox[2] * img_w))
+                py2 = min(img_h, int(pbox[3] * img_h))
+                pw = px2 - px1
+                ph = py2 - py1
+                if pw < 10 or ph < 15:
+                    continue
+
+                # Head ROI: Upper 38% of person bounding box
+                hy1 = py1
+                hy2 = min(img_h, py1 + max(15, int(ph * 0.38)))
+                hx1 = max(0, px1 - int(pw * 0.05))
+                hx2 = min(img_w, px2 + int(pw * 0.05))
+                head_crop = frame[hy1:hy2, hx1:hx2]
+                if head_crop.size == 0:
+                    continue
+
+                # Run localized Haar/YuNet face detection on head ROI
+                sub_faces = face_engine.detect_faces(head_crop)
+                if sub_faces:
+                    fx, fy, fw, fh = sub_faces[0]
+                    f_crop = head_crop[fy:fy+fh, fx:fx+fw]
+                    if f_crop.size == 0:
+                        f_crop = head_crop
+                    f_box = [(hx1 + fx) / img_w, (hy1 + fy) / img_h, (hx1 + fx + fw) / img_w, (hy1 + fy + fh) / img_h]
+                else:
+                    f_crop = head_crop
+                    f_box = [hx1 / img_w, hy1 / img_h, hx2 / img_w, hy2 / img_h]
+
+                quality_score, sharpness, _ = self.quality_checker.evaluate_face_crop(f_crop)
+                detections.append(FaceDetectionResult(
+                    box=f_box,
+                    confidence=0.88,
+                    face_crop=f_crop,
+                    quality_score=quality_score,
+                    sharpness_score=sharpness
+                ))
+
+        # Full-frame detection fallback if no person tracks were available
         if not detections:
-            cascade_boxes = face_engine.detect_faces(frame)
-            img_h_tmp, img_w_tmp = frame.shape[:2]
-            for (x, y, w, h) in cascade_boxes:
-                x1, y1 = max(0, x), max(0, y)
-                x2, y2 = min(img_w_tmp, x + w), min(img_h_tmp, y + h)
-                crop = frame[y1:y2, x1:x2]
-                if crop.size > 0:
-                    norm_box = [x1 / img_w_tmp, y1 / img_h_tmp, x2 / img_w_tmp, y2 / img_h_tmp]
-                    detections.append(FaceDetectionResult(
-                        box=norm_box,
-                        confidence=0.85,
-                        face_crop=crop,
-                        quality_score=0.80,
-                        sharpness_score=45.0
-                    ))
+            if self.detector_adapter.status == AdapterStatus.LOADED:
+                detections = self.detector_adapter.detect_faces(frame, confidence_threshold=0.40)
+            if not detections:
+                cascade_boxes = face_engine.detect_faces(frame)
+                for (x, y, w, h) in cascade_boxes:
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(img_w, x + w), min(img_h, y + h)
+                    crop = frame[y1:y2, x1:x2]
+                    if crop.size > 0:
+                        norm_box = [x1 / img_w, y1 / img_h, x2 / img_w, y2 / img_h]
+                        quality_score, sharpness, _ = self.quality_checker.evaluate_face_crop(crop)
+                        detections.append(FaceDetectionResult(
+                            box=norm_box,
+                            confidence=0.85,
+                            face_crop=crop,
+                            quality_score=quality_score,
+                            sharpness_score=sharpness
+                        ))
 
         if not detections:
             return []

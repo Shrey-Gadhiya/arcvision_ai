@@ -70,6 +70,7 @@ class CameraStreamer:
         self.latest_motion_boxes: List[List[float]] = []
         self.latest_motion_score: float = 0.0
         self._vehicle_plate_cache: Dict[int, Dict[str, Any]] = {}
+        self._person_face_cache: Dict[int, Dict[str, Any]] = {}
         self._in_flight_ocr_tracks: set = set()
         self._ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"Cam{self.camera_id}_OCR")
         
@@ -444,7 +445,7 @@ class CameraStreamer:
         """Asynchronous OCR worker running in thread pool to prevent blocking YOLO & tracking."""
         try:
             v_h, v_w = v_crop.shape[:2]
-            y_start = int(v_h * 0.30)
+            y_start = int(v_h * 0.25) if vehicle_class in ["motorcycle", "bicycle", "bike", "scooter", "motorbike"] else int(v_h * 0.30)
             plate_roi = v_crop[y_start:v_h, :]
             p_res = anpr_service.ocr_adapter.detect_and_read_from_frame(plate_roi if plate_roi.size > 0 else v_crop)
             if not p_res and plate_roi.size > 0:
@@ -477,7 +478,7 @@ class CameraStreamer:
                             "frame_num": frame_num
                         }
 
-            # Dispatch ANPR DB persistence and watchlist matching asynchronously
+            # Dispatch ANPR DB persistence and watchlist matching asynchronously with precomputed data
             self._dispatch_task(
                 anpr_service.process_vehicle(
                     camera_id=self.camera_id,
@@ -487,7 +488,8 @@ class CameraStreamer:
                     vehicle_crop=v_crop,
                     full_frame=frame,
                     dwell_duration_sec=dwell_sec,
-                    is_stationary=is_stationary
+                    is_stationary=is_stationary,
+                    precomputed_plate_data=p_res
                 )
             )
         except Exception as e:
@@ -526,19 +528,29 @@ class CameraStreamer:
             evidence_package = {}
 
             # 2b. Live Face Detection & Unique Person ID Tracking (Async)
-            if frame_num % 3 == 0:
-                person_trks = [{"track_id": d.track_id, "box": d.box} for d in tracked if d.class_name in ["person", "human", "pedestrian"]]
-                if person_trks:
-                    self._dispatch_task(
-                        face_service.process_frame_faces(
-                            camera_id=self.camera_id,
-                            camera_name=self.camera_name,
-                            frame=frame.copy(),
-                            person_tracks=person_trks
-                        )
+            person_trks = [{"track_id": d.track_id, "box": d.box} for d in tracked if d.class_name in ["person", "human", "pedestrian"]]
+            if person_trks and (frame_num % 2 == 0):
+                async def _async_face_proc(f_copy, p_trks):
+                    evs = await face_service.process_frame_faces(
+                        camera_id=self.camera_id,
+                        camera_name=self.camera_name,
+                        frame=f_copy,
+                        person_tracks=p_trks
                     )
+                    if evs:
+                        with self._lock:
+                            for ev in evs:
+                                t_id = ev.get("track_id")
+                                if t_id:
+                                    self._person_face_cache[t_id] = {
+                                        "unique_person_id": ev.get("unique_person_id"),
+                                        "face_name": ev.get("identity_name"),
+                                        "is_matched": ev.get("match_status") == "KNOWN"
+                                    }
+                self._dispatch_task(_async_face_proc(frame.copy(), person_trks))
 
-            # 3. Spatial Rules & High-Precision ANPR License Plate Tracking
+            # 3. Spatial Rules & High-Precision ANPR License Plate Tracking for all vehicle types
+            VEHICLE_TYPES = ["car", "truck", "bus", "motorcycle", "bicycle", "bike", "scooter", "motorbike", "vehicle", "van", "auto", "train"]
             for det in tracked:
                 centroid = det.attributes.get("centroid", (0.5, 0.5))
                 traj = det.attributes.get("trajectory", [])
@@ -547,13 +559,22 @@ class CameraStreamer:
                 active_zones_map[det.track_id] = active_z
                 breaches = zone_engine.check_tripwire_crossing(traj, self.tripwires)
 
-                if self.anpr_enabled and det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"]:
+                # Attach cached face ID to person track
+                if det.class_name in ["person", "human", "pedestrian"]:
+                    cached_f = self._person_face_cache.get(det.track_id)
+                    if cached_f:
+                        det.attributes["unique_person_id"] = cached_f.get("unique_person_id")
+                        det.attributes["face_name"] = cached_f.get("face_name")
+                        if cached_f.get("is_matched"):
+                            det.attributes["is_matched"] = True
+
+                if self.anpr_enabled and det.class_name in VEHICLE_TYPES:
                     vx1, vy1 = max(0, int(det.box[0] * w_orig)), max(0, int(det.box[1] * h_orig))
                     vx2, vy2 = min(w_orig, int(det.box[2] * w_orig)), min(h_orig, int(det.box[3] * h_orig))
                     
-                    # 8% padding around vehicle to capture entire bumper, grill, and plate clearly
-                    pad_w = int((vx2 - vx1) * 0.08)
-                    pad_h = int((vy2 - vy1) * 0.08)
+                    # 10% padding around vehicle to capture entire bumper, grill, front/rear plates
+                    pad_w = int((vx2 - vx1) * 0.10)
+                    pad_h = int((vy2 - vy1) * 0.10)
                     vx1_pad = max(0, vx1 - pad_w)
                     vy1_pad = max(0, vy1 - pad_h)
                     vx2_pad = min(w_orig, vx2 + pad_w)
@@ -779,6 +800,12 @@ class CameraStreamer:
                         det.attributes["plate_box"] = cached_p.get("plate_box")
                         det.attributes["is_matched"] = cached_p.get("is_matched", False)
                         det.attributes["watchlist_category"] = cached_p.get("watchlist_category")
+                    cached_f = self._person_face_cache.get(det.track_id)
+                    if cached_f:
+                        det.attributes["unique_person_id"] = cached_f.get("unique_person_id")
+                        det.attributes["face_name"] = cached_f.get("face_name")
+                        if cached_f.get("is_matched"):
+                            det.attributes["is_matched"] = True
 
                 annotated = self._annotate_frame(frame, current_detections)
                 ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])

@@ -28,19 +28,21 @@ class FaceEngine:
         if self.face_cascade is not None:
             try:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+                # Contrast normalization for challenging lighting
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                gray_eq = clahe.apply(gray)
                 faces = self.face_cascade.detectMultiScale(
-                    gray,
+                    gray_eq,
                     scaleFactor=1.1,
-                    minNeighbors=5,
-                    minSize=(30, 30)
+                    minNeighbors=4,
+                    minSize=(20, 20)
                 )
-                return [[int(x), int(y), int(w), int(h)] for (x, y, w, h) in faces]
+                if len(faces) > 0:
+                    return [[int(x), int(y), int(w), int(h)] for (x, y, w, h) in faces]
             except Exception:
                 pass
         
-        # Fallback heuristic: center crop or default bounding box if needed
-        h, w = frame.shape[:2]
-        return [[int(w * 0.1), int(h * 0.1), int(w * 0.8), int(h * 0.8)]]
+        return []
 
     def extract_embedding(self, face_crop: np.ndarray) -> List[float]:
         """

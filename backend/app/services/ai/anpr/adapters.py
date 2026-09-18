@@ -217,6 +217,15 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
             if res3:
                 results = res3
 
+        # Pass 4: Adaptive Gaussian Thresholding (detects white-on-black and black-on-white plates)
+        if not results or not any(is_valid_plate_candidate(clean_raw_plate(t)) for _, t, _ in results):
+            gray_im = cv2.cvtColor(frame_or_crop, cv2.COLOR_BGR2GRAY) if len(frame_or_crop.shape) == 3 else frame_or_crop
+            blur = cv2.GaussianBlur(gray_im, (5, 5), 0)
+            thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 19, 9)
+            res4 = _run_ocr_pass(thresh)
+            if res4:
+                results = res4
+
         self.latency_ms = (time.time() - t0) * 1000.0
 
         if not results:
@@ -254,16 +263,14 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
                 if single_best is None or item["conf"] > single_best["conf"]:
                     single_best = item
 
-        # Check for two-line stacked plate (e.g. Line 1: HR 26, Line 2: DD 2911)
+        # Check for stacked 2-line or 3-line plates (common on bikes, scooters, and square plates)
         stitched_result = None
         if len(parsed_items) >= 2:
             # Check adjacent items in proximity
             for i in range(len(parsed_items) - 1):
                 it1, it2 = parsed_items[i], parsed_items[i + 1]
-                # Combined text
                 comb_cleaned = it1["cleaned"] + it2["cleaned"]
                 if 4 <= len(comb_cleaned) <= 12:
-                    # Check spatial proximity: bounding box union
                     u_xmin = min(it1["box"][0], it2["box"][0])
                     u_ymin = min(it1["box"][1], it2["box"][1])
                     u_xmax = max(it1["box"][2], it2["box"][2])
@@ -271,8 +278,7 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
                     box_w = u_xmax - u_xmin
                     box_h = u_ymax - u_ymin
 
-                    # Aspect ratio check for plate region
-                    if box_w > 10 and box_h > 10:
+                    if box_w > 8 and box_h > 8:
                         comb_conf = round(float((it1["conf"] + it2["conf"]) / 2.0), 3)
                         stitched_result = {
                             "raw_text": f"{it1['raw_text']} {it2['raw_text']}",

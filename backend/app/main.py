@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     # --- STARTUP ---
     logger.info("Initializing ARC VISION Tactical Surveillance Core...")
     await init_db()
+    stream_manager.set_main_loop(asyncio.get_running_loop())
 
     # Seed or verify default RBAC user accounts
     async with AsyncSessionLocal() as session:

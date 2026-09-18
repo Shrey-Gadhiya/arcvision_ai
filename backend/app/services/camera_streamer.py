@@ -46,7 +46,8 @@ class CameraStreamer:
         zones: List[Dict[str, Any]] = None,
         tripwires: List[Dict[str, Any]] = None,
         is_night_mode: bool = True,
-        anpr_enabled: bool = True
+        anpr_enabled: bool = True,
+        main_loop: Optional[asyncio.AbstractEventLoop] = None
     ):
         self.camera_id = camera_id
         self.camera_name = camera_name
@@ -55,6 +56,13 @@ class CameraStreamer:
         self.target_fps = max(20, target_fps)
         self.is_night_mode = is_night_mode
         self.anpr_enabled = anpr_enabled
+        if main_loop is not None:
+            self._main_loop = main_loop
+        else:
+            try:
+                self._main_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._main_loop = None
 
         self.zones = zones or []
         self.tripwires = tripwires or []
@@ -92,11 +100,21 @@ class CameraStreamer:
         self._last_clip_time = 0.0
         self._lock = threading.Lock()
 
+    def set_main_loop(self, loop: asyncio.AbstractEventLoop):
+        self._main_loop = loop
+
     def _dispatch_task(self, coro):
+        if self._main_loop and self._main_loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+                return
+            except Exception as e:
+                logger.debug(f"[Dispatch] Error dispatching to main_loop: {e}")
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(coro)
-            return
+            if loop.is_running():
+                loop.create_task(coro)
+                return
         except RuntimeError:
             pass
 

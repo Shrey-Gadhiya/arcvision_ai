@@ -14,6 +14,12 @@ logger = logging.getLogger("arc_vision.stream_manager")
 class StreamManager:
     def __init__(self):
         self._streamers: Dict[int, CameraStreamer] = {}
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def set_main_loop(self, loop: asyncio.AbstractEventLoop):
+        self._main_loop = loop
+        for streamer in self._streamers.values():
+            streamer.set_main_loop(loop)
 
     def start_streamer(
         self,
@@ -25,10 +31,19 @@ class StreamManager:
         zones: List[Dict[str, Any]] = None,
         tripwires: List[Dict[str, Any]] = None,
         is_night_mode: bool = True,
-        anpr_enabled: bool = True
+        anpr_enabled: bool = True,
+        main_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> CameraStreamer:
         if camera_id in self._streamers:
             self._streamers[camera_id].stop()
+
+        target_loop = main_loop or self._main_loop
+        if target_loop is None:
+            try:
+                target_loop = asyncio.get_running_loop()
+                self._main_loop = target_loop
+            except RuntimeError:
+                pass
 
         streamer = CameraStreamer(
             camera_id=camera_id,
@@ -39,7 +54,8 @@ class StreamManager:
             zones=zones,
             tripwires=tripwires,
             is_night_mode=is_night_mode,
-            anpr_enabled=anpr_enabled
+            anpr_enabled=anpr_enabled,
+            main_loop=target_loop
         )
         streamer.start()
         self._streamers[camera_id] = streamer

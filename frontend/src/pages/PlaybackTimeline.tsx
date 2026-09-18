@@ -8,7 +8,8 @@ import {
   Layers,
   Shield,
   Film,
-  CheckCircle2
+  CheckCircle2,
+  Trash2
 } from 'lucide-react';
 import { Camera, RecordingSegment, Incident } from '../types';
 import { nvrApi } from '../api/nvr';
@@ -80,7 +81,26 @@ export const PlaybackTimeline: React.FC<PlaybackTimelineProps> = ({
       .finally(() => {
         setIsLoading(false);
       });
-  }, [selectedCameraId, windowHours, timeBounds.start, timeBounds.end]);
+  }, [selectedCameraId, timeBounds]);
+
+  const [isPurging, setIsPurging] = useState<boolean>(false);
+
+  const handlePurgeAllRecordings = async () => {
+    if (!window.confirm('Are you sure you want to permanently delete ALL recorded video segments across all cameras? This action cannot be undone.')) {
+      return;
+    }
+    setIsPurging(true);
+    try {
+      await nvrApi.purgeAllRecordings();
+      setSegments([]);
+      setActiveSegment(null);
+      alert('All recorded video segments have been permanently purged.');
+    } catch (e) {
+      alert('Failed to purge recordings.');
+    } finally {
+      setIsPurging(false);
+    }
+  };
 
   // Handle Play/Pause
   const togglePlay = () => {
@@ -227,6 +247,17 @@ export const PlaybackTimeline: React.FC<PlaybackTimelineProps> = ({
           >
             <span className={`w-2 h-2 rounded-full ${isLiveMode ? 'bg-white animate-pulse' : 'bg-zinc-600'}`} />
             {isLiveMode ? 'LIVE' : 'Go Live'}
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            className="!border-red-900/60 !text-red-400 hover:!bg-red-950/40 text-xs flex items-center gap-1.5"
+            icon={<Trash2 className="w-3 h-3 text-red-400" />}
+            onClick={handlePurgeAllRecordings}
+            disabled={isPurging}
+          >
+            {isPurging ? 'Purging...' : 'Purge All Recordings'}
           </Button>
         </div>
       </div>

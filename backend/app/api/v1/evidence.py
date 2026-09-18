@@ -249,3 +249,51 @@ async def verify_evidence_package_endpoint(
 
     return res
 
+@router.post("/purge-all")
+@router.delete("/purge-all")
+async def purge_all_evidence(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Purges all evidence records, snapshots, and related events from database and disk.
+    """
+    import shutil
+    from sqlalchemy import delete
+    from app.models.snapshot import TrackedSnapshot
+    from app.models.incident import Incident
+    from app.models.anpr import ANPRRecord
+    from app.models.face import FaceRecord
+    from app.models.event import DetectionEvent, RuleEvent
+    from app.models.investigation import InvestigationCase, CaseFinding
+    from app.models.cross_camera import TrackObservation, ReidMatch, GlobalTrack
+    from app.models.notification import Notification
+
+    # Clear all DB tables
+    for model in [Evidence, TrackedSnapshot, ANPRRecord, FaceRecord, DetectionEvent, RuleEvent,
+                  TrackObservation, ReidMatch, Notification, GlobalTrack, CaseFinding, InvestigationCase, Incident]:
+        try:
+            await db.execute(delete(model))
+        except Exception as e:
+            logger.warning(f"Error clearing {model}: {e}")
+    await db.commit()
+
+    evidence_files = 0
+    if settings.EVIDENCE_DIR.exists():
+        for root, dirs, files in os.walk(settings.EVIDENCE_DIR):
+            evidence_files += len(files)
+        shutil.rmtree(settings.EVIDENCE_DIR)
+        settings.EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+
+    snapshot_files = 0
+    if settings.SNAPSHOTS_DIR.exists():
+        for root, dirs, files in os.walk(settings.SNAPSHOTS_DIR):
+            snapshot_files += len(files)
+        shutil.rmtree(settings.SNAPSHOTS_DIR)
+        settings.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "status": "SUCCESS",
+        "message": "All captured evidence, snapshots, and incidents purged",
+        "deleted_evidence_files": evidence_files,
+        "deleted_snapshot_files": snapshot_files
+    }

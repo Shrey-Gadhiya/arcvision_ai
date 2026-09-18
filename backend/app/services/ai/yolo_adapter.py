@@ -13,6 +13,7 @@ SURVEILLANCE_CLASSES = {
     2: "car",
     3: "motorcycle",
     5: "bus",
+    6: "train",
     7: "truck",
     15: "cat",
     16: "dog",

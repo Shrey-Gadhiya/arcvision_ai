@@ -322,7 +322,7 @@ class CameraStreamer:
             vw = max(1, x2 - x1)
             vh = max(1, y2 - y1)
 
-            is_vehicle = det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto"]
+            is_vehicle = det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"]
             is_matched = det.attributes.get("is_matched", False)
             plate_number = det.attributes.get("plate")
 
@@ -444,15 +444,19 @@ class CameraStreamer:
         """Asynchronous OCR worker running in thread pool to prevent blocking YOLO & tracking."""
         try:
             v_h, v_w = v_crop.shape[:2]
-            y_start = int(v_h * 0.38)
+            y_start = int(v_h * 0.30)
             plate_roi = v_crop[y_start:v_h, :]
             p_res = anpr_service.ocr_adapter.detect_and_read_from_frame(plate_roi if plate_roi.size > 0 else v_crop)
+            if not p_res and plate_roi.size > 0:
+                p_res = anpr_service.ocr_adapter.detect_and_read_from_frame(v_crop)
+                y_start = 0
+
             if p_res:
                 p_text = p_res.get("cleaned_text") or p_res.get("raw_text")
                 raw_p = p_res.get("raw_text")
                 p_box = p_res.get("box")
                 p_conf = p_res.get("confidence", 0.8)
-                if p_box and plate_roi.size > 0:
+                if p_box and y_start > 0:
                     p_box = [p_box[0], p_box[1] + y_start, p_box[2], p_box[3] + y_start]
 
                 if p_text and len(clean_raw_plate(p_text)) >= 3:
@@ -509,10 +513,11 @@ class CameraStreamer:
             self.latest_motion_boxes = motion_boxes
             self.latest_motion_score = motion_score
 
-            # 2. YOLO Object Detection & Tracking (Extremely fast 15-25ms)
+            # 2. YOLO Object Detection & Tracking (Full-resolution high recall threshold 0.18)
+            det_frame = frame
             if self.is_night_mode and (frame_num % 4 == 0):
-                proc_frame = night_vision_processor.enhance_low_light(proc_frame)
-            raw_detections = detector_service.detect(proc_frame, confidence_threshold=0.35)
+                det_frame = night_vision_processor.enhance_low_light(det_frame)
+            raw_detections = detector_service.detect(det_frame, confidence_threshold=0.18)
             tracked = self.tracker.update(raw_detections)
 
             has_incident_this_frame = False
@@ -533,7 +538,7 @@ class CameraStreamer:
                         )
                     )
 
-            # 3. Spatial Rules & Non-blocking ANPR License Plate Tracking
+            # 3. Spatial Rules & High-Precision ANPR License Plate Tracking
             for det in tracked:
                 centroid = det.attributes.get("centroid", (0.5, 0.5))
                 traj = det.attributes.get("trajectory", [])
@@ -542,13 +547,22 @@ class CameraStreamer:
                 active_zones_map[det.track_id] = active_z
                 breaches = zone_engine.check_tripwire_crossing(traj, self.tripwires)
 
-                if self.anpr_enabled and det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto"]:
+                if self.anpr_enabled and det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"]:
                     vx1, vy1 = max(0, int(det.box[0] * w_orig)), max(0, int(det.box[1] * h_orig))
                     vx2, vy2 = min(w_orig, int(det.box[2] * w_orig)), min(h_orig, int(det.box[3] * h_orig))
-                    if vx2 > vx1 and vy2 > vy1:
-                        v_crop = frame[vy1:vy2, vx1:vx2]
+                    
+                    # 8% padding around vehicle to capture entire bumper, grill, and plate clearly
+                    pad_w = int((vx2 - vx1) * 0.08)
+                    pad_h = int((vy2 - vy1) * 0.08)
+                    vx1_pad = max(0, vx1 - pad_w)
+                    vy1_pad = max(0, vy1 - pad_h)
+                    vx2_pad = min(w_orig, vx2 + pad_w)
+                    vy2_pad = min(h_orig, vy2 + pad_h)
+                    
+                    if vx2_pad > vx1_pad and vy2_pad > vy1_pad:
+                        v_crop = frame[vy1_pad:vy2_pad, vx1_pad:vx2_pad]
                         
-                        # Instantly attach cached plate attributes (Zero latency visual tracking!)
+                        # Instantly attach cached plate attributes
                         cached_plate = self._vehicle_plate_cache.get(det.track_id)
                         if cached_plate:
                             det.attributes["plate"] = cached_plate.get("plate")

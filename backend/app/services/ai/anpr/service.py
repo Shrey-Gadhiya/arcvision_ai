@@ -43,7 +43,7 @@ from app.services.notification_service import notification_service
 logger = logging.getLogger("arc_vision.anpr.service")
 
 # Recognizable vehicle classes
-VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "vehicle"}
+VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck", "bicycle", "vehicle", "van", "auto", "train"}
 
 class PlateRecognitionService:
     """
@@ -476,6 +476,16 @@ class PlateRecognitionService:
         # 8. Database Persistence & Watchlist Matching
         async with AsyncSessionLocal() as session:
             try:
+                from app.models.camera import Camera
+                # Validate camera existence
+                cam_res = await session.execute(select(Camera.id).where(Camera.id == camera_id))
+                target_cam_id = cam_res.scalars().first()
+                if not target_cam_id:
+                    first_cam = await session.execute(select(Camera.id).limit(1))
+                    target_cam_id = first_cam.scalars().first()
+                if not target_cam_id:
+                    return None
+
                 # Check Watchlist Match
                 watch_res = await session.execute(
                     select(ANPRWatchlist).where(
@@ -491,7 +501,7 @@ class PlateRecognitionService:
 
                 # Create ANPR Record
                 record = ANPRRecord(
-                    camera_id=camera_id,
+                    camera_id=target_cam_id,
                     track_id=track_id,
                     raw_text=raw_text,
                     plate_number=normalized_plate,

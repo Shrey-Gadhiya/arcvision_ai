@@ -129,6 +129,8 @@ class TrackedObject:
             }
         )
 
+VEHICLE_FAMILY = {"car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"}
+
 def calculate_iou(boxA: List[float], boxB: List[float]) -> float:
     # Determine coordinates of intersection rectangle
     xA = max(boxA[0], boxB[0])
@@ -149,7 +151,7 @@ def calculate_iou(boxA: List[float], boxB: List[float]) -> float:
     return inter_area / union_area
 
 class MultiObjectTracker:
-    def __init__(self, max_missed_frames: int = 15, iou_threshold: float = 0.25):
+    def __init__(self, max_missed_frames: int = 15, iou_threshold: float = 0.20):
         self.max_missed_frames = max_missed_frames
         self.iou_threshold = iou_threshold
         self.tracks: Dict[int, TrackedObject] = {}
@@ -163,21 +165,45 @@ class MultiObjectTracker:
         matched_tracks = set()
         matched_detections = set()
 
-        # Match existing tracks with detections based on IOU and class
+        # Match existing tracks with detections based on IOU, predicted IOU, and spatial proximity
         for det_idx, det in enumerate(detections):
-            best_iou = 0.0
+            best_score = 0.0
             best_track_id = None
+            d_cx = (det.box[0] + det.box[2]) / 2.0
+            d_cy = (det.box[1] + det.box[3]) / 2.0
+
             for track_id, track in self.tracks.items():
                 if track_id in matched_tracks:
                     continue
-                if track.class_name != det.class_name:
+
+                # Class compatibility: allow exact match or vehicle superclass match
+                class_matches = (track.class_name == det.class_name) or (
+                    track.class_name in VEHICLE_FAMILY and det.class_name in VEHICLE_FAMILY
+                )
+                if not class_matches:
                     continue
+
+                # 1. Direct bounding box IoU
                 iou = calculate_iou(track.box, det.box)
-                if iou > best_iou:
-                    best_iou = iou
+
+                # 2. Velocity-projected bounding box IoU (for fast moving vehicles)
+                pred_det = track.predict(0.05)
+                pred_iou = calculate_iou(pred_det.box, det.box)
+                effective_iou = max(iou, pred_iou)
+
+                # 3. Spatial centroid distance
+                t_cx, t_cy = track.centroid
+                c_dist = math.hypot(d_cx - t_cx, d_cy - t_cy)
+                
+                # Proximity score (1.0 - normalized distance)
+                prox_score = max(0.0, 1.0 - (c_dist / 0.20)) if c_dist < 0.20 else 0.0
+                combined_score = max(effective_iou, prox_score * 0.75)
+
+                if combined_score > best_score:
+                    best_score = combined_score
                     best_track_id = track_id
 
-            if best_track_id is not None and best_iou >= self.iou_threshold:
+            if best_track_id is not None and best_score >= self.iou_threshold:
                 self.tracks[best_track_id].update(det)
                 matched_tracks.add(best_track_id)
                 matched_detections.add(det_idx)
@@ -194,11 +220,13 @@ class MultiObjectTracker:
         for t_id in dead_tracks:
             del self.tracks[t_id]
 
-        # Return active detections with assigned track_id and attributes
+        # Return active detections (including 1-frame grace prediction to prevent flicker)
         result: List[Detection] = []
         for track in self.tracks.values():
             if track.missed_frames == 0:
                 result.append(track.to_detection())
+            elif track.missed_frames == 1:
+                result.append(track.predict(0.03))
         return result
 
     def predict_all(self, dt: float) -> List[Detection]:

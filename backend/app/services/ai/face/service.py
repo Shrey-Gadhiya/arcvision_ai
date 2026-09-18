@@ -589,8 +589,17 @@ class FaceRecognitionService:
             # Persist FaceRecord to DB with unique_person_id
             async with AsyncSessionLocal() as session:
                 try:
+                    from app.models.camera import Camera
+                    cam_chk = await session.execute(select(Camera.id).where(Camera.id == camera_id))
+                    target_cam_id = cam_chk.scalars().first()
+                    if not target_cam_id:
+                        first_c = await session.execute(select(Camera.id).limit(1))
+                        target_cam_id = first_c.scalars().first()
+                    if not target_cam_id:
+                        continue
+
                     record = FaceRecord(
-                        camera_id=camera_id,
+                        camera_id=target_cam_id,
                         track_id=track_id,
                         unique_person_id=unique_person_id,
                         identity_id=match_res.identity_id,

@@ -116,8 +116,13 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
     def preprocess_plate(self, crop: np.ndarray) -> np.ndarray:
         if crop is None or crop.size == 0:
             return crop
+        h, w = crop.shape[:2]
+        # If crop is low resolution (e.g. distant vehicle), upscale using cubic interpolation
+        if h < 90 or w < 220:
+            scale = max(1.5, min(3.0, 160.0 / max(1, h)))
+            crop = cv2.resize(crop, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         contrast = clahe.apply(gray)
         filtered = cv2.bilateralFilter(contrast, 9, 75, 75)
         return filtered

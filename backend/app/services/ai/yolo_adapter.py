@@ -40,17 +40,30 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         try:
             from ultralytics import YOLO
             import torch
+            from pathlib import Path
             
             # Auto-detect CUDA if device is auto or cuda
             if self.device in ["auto", "cuda", "cuda:0"] and torch.cuda.is_available():
                 self.device = "cuda:0"
+                model_to_load = self.model_path
             else:
                 self.device = "cpu"
+                # Check for high-performance Intel/AMD OpenVINO model
+                candidates = [
+                    Path(self.model_path).parent / "yolov8n_openvino_model",
+                    Path("yolov8n_openvino_model"),
+                    Path(__file__).parent.parent.parent.parent / "yolov8n_openvino_model",
+                ]
+                model_to_load = self.model_path
+                for c in candidates:
+                    if c.exists() and (c / "yolov8n.xml").exists():
+                        model_to_load = str(c)
+                        break
 
-            self.model = YOLO(self.model_path)
+            self.model = YOLO(model_to_load)
             self.status = DetectorStatus.LOADED
             self.last_error = None
-            logger.info(f"Successfully loaded YOLO detector '{self.name}' from {self.model_path} on {self.device}")
+            logger.info(f"Successfully loaded YOLO detector '{self.name}' from {model_to_load} on {self.device}")
             return True
         except Exception as e:
             self.status = DetectorStatus.ERROR
@@ -77,17 +90,13 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         detections: List[Detection] = []
 
         try:
-            # Parse input resolution if specified e.g. "480x480" or "640x640"
-            try:
-                imgsz = int(self.input_resolution.split("x")[0])
-            except Exception:
-                imgsz = 480
-
             results = self.model(
                 frame,
                 conf=confidence_threshold,
                 classes=list(SURVEILLANCE_CLASSES.keys()),
-                imgsz=imgsz,
+                imgsz=640,
+                agnostic_nms=True,
+                iou=0.45,
                 device=self.device,
                 verbose=False
             )
@@ -106,6 +115,10 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                     y1 = max(0.0, min(1.0, xyxy[1] / h))
                     x2 = max(0.0, min(1.0, xyxy[2] / w))
                     y2 = max(0.0, min(1.0, xyxy[3] / h))
+
+                    # Filter out degenerately small boxes (< 8px)
+                    if (x2 - x1) * w < 8 or (y2 - y1) * h < 8:
+                        continue
 
                     class_name = SURVEILLANCE_CLASSES.get(cls_id, "unknown")
                     detections.append(Detection(

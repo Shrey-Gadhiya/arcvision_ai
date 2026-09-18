@@ -324,6 +324,12 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
             plate_crop = frame_or_crop
 
         best_candidate["plate_crop"] = plate_crop
+        best_candidate["box_rel"] = [
+            round(max(0.0, min(1.0, float(xmin) / max(1, w))), 4),
+            round(max(0.0, min(1.0, float(ymin) / max(1, h))), 4),
+            round(max(0.0, min(1.0, float(xmax) / max(1, w))), 4),
+            round(max(0.0, min(1.0, float(ymax) / max(1, h))), 4)
+        ]
         return best_candidate
 
 class UnavailablePlateDetectorAdapter(BasePlateDetectorAdapter):

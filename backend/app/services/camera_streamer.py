@@ -289,7 +289,7 @@ class CameraStreamer:
         return cv2.VideoCapture(url)
 
     def _annotate_frame(self, frame: np.ndarray, detections: List[Any]) -> np.ndarray:
-        """Renders live tactical HUD overlays, bounding boxes, and virtual fence lines."""
+        """Renders live tactical HUD overlays, clean bounding boxes, and accurate plate/face badges."""
         overlay = frame.copy()
         h, w = frame.shape[:2]
 
@@ -314,119 +314,82 @@ class CameraStreamer:
             cv2.circle(overlay, p2, 3, (255, 255, 255), -1)
             cv2.putText(overlay, f"FENCE: {tw.get('name')}", (p1[0], p1[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
-        # Draw Tracked Detections (Crisp Tactical HUD with Dedicated Number Plate Target Squares)
+        # Draw Tracked Detections (Rock-solid, accurate bounding boxes)
         for det in detections:
-            x1 = int(det.box[0] * w)
-            y1 = int(det.box[1] * h)
-            x2 = int(det.box[2] * w)
-            y2 = int(det.box[3] * h)
+            x1 = max(0, min(w - 2, int(det.box[0] * w)))
+            y1 = max(0, min(h - 2, int(det.box[1] * h)))
+            x2 = max(x1 + 4, min(w, int(det.box[2] * w)))
+            y2 = max(y1 + 4, min(h, int(det.box[3] * h)))
             vw = max(1, x2 - x1)
             vh = max(1, y2 - y1)
 
-            is_vehicle = det.class_name in ["car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"]
+            is_vehicle = det.class_name in ["car", "truck", "bus", "motorcycle", "bicycle", "bike", "scooter", "motorbike", "vehicle", "van", "auto", "train"]
+            is_person = det.class_name in ["person", "human", "pedestrian"]
             is_matched = det.attributes.get("is_matched", False)
             plate_number = det.attributes.get("plate")
 
-            # Vehicle & Object Bounding Box Color
+            # Clean tactical color scheme
             if is_matched:
-                box_color = (30, 30, 240) # Alert Red for Watchlist hits
+                box_color = (0, 0, 255) # Bright Alert Red
             elif is_vehicle and plate_number:
-                box_color = (40, 230, 100) # Bright Neon Emerald
+                box_color = (0, 255, 128) # Vibrant Neon Green for verified vehicles
+            elif is_person:
+                box_color = (0, 220, 255) # Crisp Tactical Gold/Amber for persons
             elif is_vehicle:
-                box_color = (255, 255, 255) # Tactical White
+                box_color = (255, 255, 255) # Clean Crisp White
             else:
-                box_color = (255, 255, 255)
+                box_color = (200, 200, 200)
 
+            # 1. Clean, perfect, sharp object bounding box
             cv2.rectangle(overlay, (x1, y1), (x2, y2), box_color, 2)
 
-            # Corner brackets for tactical HUD look
-            b_len = max(8, int(min(vw, vh) * 0.15))
-            cv2.line(overlay, (x1, y1), (x1 + b_len, y1), (255, 255, 255), 2)
-            cv2.line(overlay, (x1, y1), (x1, y1 + b_len), (255, 255, 255), 2)
-            cv2.line(overlay, (x2, y2), (x2 - b_len, y2), (255, 255, 255), 2)
-            cv2.line(overlay, (x2, y2), (x2, y2 - b_len), (255, 255, 255), 2)
-            cv2.line(overlay, (x2, y1), (x2 - b_len, y1), (255, 255, 255), 2)
-            cv2.line(overlay, (x2, y1), (x2, y1 + b_len), (255, 255, 255), 2)
-            cv2.line(overlay, (x1, y2), (x1 + b_len, y2), (255, 255, 255), 2)
-            cv2.line(overlay, (x1, y2), (x1, y2 - b_len), (255, 255, 255), 2)
+            # 2. Top identification header
+            tag = f"{det.class_name.upper()} {int(det.confidence * 100)}% [#{det.track_id}]"
+            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+            by = max(th + 6, y1)
+            cv2.rectangle(overlay, (x1, by - th - 5), (x1 + tw + 6, by), (0, 0, 0), -1)
+            cv2.rectangle(overlay, (x1, by - th - 5), (x1 + tw + 6, by), box_color, 1)
+            cv2.putText(overlay, tag, (x1 + 3, by - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
-            # Top label banner
-            dwell = det.attributes.get("dwell_sec", 0.0)
-            tag = f"ID:{det.track_id} {det.class_name.upper()} {int(det.confidence * 100)}% | {dwell}s"
-            tag_w = len(tag) * 8 + 8
-            banner_top_y = max(20, y1)
-            cv2.rectangle(overlay, (x1, banner_top_y - 20), (x1 + tag_w, banner_top_y), (0, 0, 0), -1)
-            cv2.rectangle(overlay, (x1, banner_top_y - 20), (x1 + tag_w, banner_top_y), box_color, 1)
-            cv2.putText(overlay, tag, (x1 + 4, banner_top_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
-
-            # VEHICLE NUMBER PLATE TARGET SQUARE & TEXT HUD
-            # ONLY render when a license plate is detected! Never show fake "SCANNING" box.
+            # 3. Vehicle License Plate Target Square & Badge
             if is_vehicle and plate_number:
+                wl_cat = det.attributes.get("watchlist_category", "ALERT")
+                p_label = f"ALERT [{wl_cat}]: {plate_number}" if is_matched else f"PLATE: {plate_number}"
+                (pw, ph), _ = cv2.getTextSize(p_label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+                pl_color = (0, 0, 255) if is_matched else (0, 255, 128)
+
                 p_box = det.attributes.get("plate_box")
-                if p_box and len(p_box) == 4:
-                    px1, py1, px2, py2 = p_box
-                    pl_x1 = max(x1, min(x2 - 10, x1 + int(px1)))
-                    pl_y1 = max(y1, min(y2 - 5, y1 + int(py1)))
-                    pl_x2 = max(pl_x1 + 25, min(x2, x1 + int(px2)))
-                    pl_y2 = max(pl_y1 + 10, min(y2, y1 + int(py2)))
+                if p_box and len(p_box) == 4 and all(0.0 <= v <= 1.0 for v in p_box):
+                    # Precise target square directly around the plate
+                    pl_x1 = max(x1, min(x2 - 10, int(x1 + p_box[0] * vw)))
+                    pl_y1 = max(y1, min(y2 - 6, int(y1 + p_box[1] * vh)))
+                    pl_x2 = max(pl_x1 + 18, min(x2, int(x1 + p_box[2] * vw)))
+                    pl_y2 = max(pl_y1 + 8, min(y2, int(y1 + p_box[3] * vh)))
+                    cv2.rectangle(overlay, (pl_x1, pl_y1), (pl_x2, pl_y2), pl_color, 2)
+                    
+                    # Plate label directly on/above target square
+                    ply = max(ph + 4, pl_y1 - 3)
+                    cv2.rectangle(overlay, (pl_x1, ply - ph - 4), (pl_x1 + pw + 6, ply), (0, 0, 0), -1)
+                    cv2.rectangle(overlay, (pl_x1, ply - ph - 4), (pl_x1 + pw + 6, ply), pl_color, 1)
+                    cv2.putText(overlay, p_label, (pl_x1 + 3, ply - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
                 else:
-                    # Realistic vehicle plate location (lower-center fascia)
-                    pl_x1 = int(x1 + vw * 0.22)
-                    pl_x2 = int(x1 + vw * 0.78)
-                    pl_y1 = int(y1 + vh * 0.65)
-                    pl_y2 = int(y1 + vh * 0.88)
+                    # High-contrast plate banner directly below vehicle
+                    ply = min(h - 4, y2 + ph + 6) if (y2 + ph + 10) < h else max(18, y1 - 22)
+                    cv2.rectangle(overlay, (x1, ply - ph - 4), (x1 + pw + 6, ply), (0, 0, 0), -1)
+                    cv2.rectangle(overlay, (x1, ply - ph - 4), (x1 + pw + 6, ply), pl_color, 1)
+                    cv2.putText(overlay, p_label, (x1 + 3, ply - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
-                # Clamp & enforce minimum dimensions for crisp rendering
-                if (pl_x2 - pl_x1) < 46:
-                    cx = (pl_x1 + pl_x2) // 2
-                    pl_x1 = max(x1, cx - 23)
-                    pl_x2 = min(x2, cx + 23)
-                if (pl_y2 - pl_y1) < 16:
-                    cy = (pl_y1 + pl_y2) // 2
-                    pl_y1 = max(y1, cy - 8)
-                    pl_y2 = min(y2, cy + 8)
-
-                pl_color = (30, 30, 240) if is_matched else (40, 230, 100)
-
-                # 1. Draw Target Square around Number Plate
-                cv2.rectangle(overlay, (pl_x1, pl_y1), (pl_x2, pl_y2), pl_color, 2)
-
-                # 2. Draw 4 Corner HUD Crosshair ticks on Plate Square
-                c_tick = max(4, int(min(pl_x2 - pl_x1, pl_y2 - pl_y1) * 0.35))
-                cv2.line(overlay, (pl_x1, pl_y1), (pl_x1 + c_tick, pl_y1), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x1, pl_y1), (pl_x1, pl_y1 + c_tick), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x2, pl_y2), (pl_x2 - c_tick, pl_y2), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x2, pl_y2), (pl_x2, pl_y2 - c_tick), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x2, pl_y1), (pl_x2 - c_tick, pl_y1), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x2, pl_y1), (pl_x2, pl_y1 + c_tick), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x1, pl_y2), (pl_x1 + c_tick, pl_y2), (255, 255, 255), 2)
-                cv2.line(overlay, (pl_x1, pl_y2), (pl_x1, pl_y2 - c_tick), (255, 255, 255), 2)
-
-                # 3. High-Contrast Plate Text Display Banner
-                wl_cat = det.attributes.get("watchlist_category", "FLAGGED")
-                if is_matched:
-                    p_label = f"ALERT [{wl_cat}]: {plate_number}"
-                else:
-                    p_label = f"PLATE: {plate_number}"
-
-                (tw, th), _ = cv2.getTextSize(p_label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-                by = pl_y1 - 4 if pl_y1 > (th + 10) else pl_y2 + th + 12
-                bx1 = max(4, pl_x1)
-                bx2 = min(w - 4, bx1 + tw + 10)
-
-                cv2.rectangle(overlay, (bx1, by - th - 6), (bx2, by + 2), (0, 0, 0), -1)
-                cv2.rectangle(overlay, (bx1, by - th - 6), (bx2, by + 2), pl_color, 1)
-                cv2.putText(overlay, p_label, (bx1 + 5, by - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1)
-
-            # Unique Person / Face HUD Badge
-            person_uid = det.attributes.get("unique_person_id")
-            face_name = det.attributes.get("face_name")
-            if person_uid or face_name:
-                face_tag = f"FACE: {face_name or person_uid} [{person_uid or 'ID'}]"
-                f_w = len(face_tag) * 8 + 10
-                cv2.rectangle(overlay, (x1, y2), (x1 + f_w, y2 + 18), (0, 0, 0), -1)
-                cv2.rectangle(overlay, (x1, y2), (x1 + f_w, y2 + 18), (0, 200, 255), 1)
-                cv2.putText(overlay, face_tag, (x1 + 4, y2 + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 200, 255), 1)
+            # 4. Person Face / Unique ID Badge
+            if is_person:
+                person_uid = det.attributes.get("unique_person_id")
+                face_name = det.attributes.get("face_name")
+                if person_uid or face_name:
+                    face_tag = f"FACE: {face_name or person_uid}"
+                    (fw, fh), _ = cv2.getTextSize(face_tag, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
+                    fy = min(h - 4, y2 + fh + 6)
+                    cv2.rectangle(overlay, (x1, fy - fh - 4), (x1 + fw + 6, fy), (0, 0, 0), -1)
+                    cv2.rectangle(overlay, (x1, fy - fh - 4), (x1 + fw + 6, fy), (0, 220, 255), 1)
+                    cv2.putText(overlay, face_tag, (x1 + 3, fy - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 220, 255), 1)
 
         # Tactical Status Watermark
         cv2.putText(overlay, f"{self.camera_name} | {self.current_fps:.1f} FPS", (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -457,10 +420,22 @@ class CameraStreamer:
                 raw_p = p_res.get("raw_text")
                 p_box = p_res.get("box")
                 p_conf = p_res.get("confidence", 0.8)
-                if p_box and y_start > 0:
-                    p_box = [p_box[0], p_box[1] + y_start, p_box[2], p_box[3] + y_start]
+                
+                # Compute exact normalized relative plate box coordinates inside the vehicle crop
+                p_box_rel = None
+                if p_box and len(p_box) == 4:
+                    px1 = max(0, min(v_w, p_box[0]))
+                    py1 = max(0, min(v_h, p_box[1] + y_start))
+                    px2 = max(0, min(v_w, p_box[2]))
+                    py2 = max(0, min(v_h, p_box[3] + y_start))
+                    p_box_rel = [
+                        round(float(px1) / max(1, v_w), 4),
+                        round(float(py1) / max(1, v_h), 4),
+                        round(float(px2) / max(1, v_w), 4),
+                        round(float(py2) / max(1, v_h), 4)
+                    ]
 
-                if p_text and len(clean_raw_plate(p_text)) >= 3:
+                if p_text and p_conf >= 0.25 and len(clean_raw_plate(p_text)) >= 3:
                     norm_p, _ = normalize_indian_plate(p_text)
                     if not norm_p:
                         norm_p = clean_raw_plate(p_text)
@@ -470,7 +445,7 @@ class CameraStreamer:
                         self._vehicle_plate_cache[track_id] = {
                             "plate": norm_p or p_text,
                             "raw_text": raw_p or p_text,
-                            "plate_box": p_box,
+                            "plate_box": p_box_rel,
                             "conf": p_conf,
                             "is_matched": existing.get("is_matched", False),
                             "watchlist_category": existing.get("watchlist_category"),
@@ -515,11 +490,11 @@ class CameraStreamer:
             self.latest_motion_boxes = motion_boxes
             self.latest_motion_score = motion_score
 
-            # 2. YOLO Object Detection & Tracking (Full-resolution high recall threshold 0.18)
+            # 2. YOLO Object Detection & Tracking (Clean 0.35 confidence gate)
             det_frame = frame
             if self.is_night_mode and (frame_num % 4 == 0):
                 det_frame = night_vision_processor.enhance_low_light(det_frame)
-            raw_detections = detector_service.detect(det_frame, confidence_threshold=0.18)
+            raw_detections = detector_service.detect(det_frame, confidence_threshold=0.35)
             tracked = self.tracker.update(raw_detections)
 
             has_incident_this_frame = False
@@ -784,13 +759,9 @@ class CameraStreamer:
                 frames_in_second += 1
                 self.last_frame_time = time.time()
 
-                # 1. Real-time velocity extrapolation on intermediate frames for 25-30 FPS smoothness
-                dt = time.time() - getattr(self, "_last_inference_time", time.time())
-                if dt > 0.02 and self.tracker.tracks:
-                    current_detections = self.tracker.predict_all(dt)
-                else:
-                    with self._lock:
-                        current_detections = list(self.latest_detections)
+                # 1. Real-time synchronized detections
+                with self._lock:
+                    current_detections = [d.copy() for d in self.latest_detections]
 
                 # Attach cached plate/face attributes
                 for det in current_detections:

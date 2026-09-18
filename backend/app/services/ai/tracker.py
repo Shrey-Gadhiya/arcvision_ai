@@ -30,8 +30,10 @@ class TrackedObject:
         now = time.time()
         dt = max(0.001, now - self.last_seen)
         
-        self.box = detection.box
+        # Exact ground-truth bounding box coordinates from detector
+        self.box = [float(c) for c in detection.box]
         self.confidence = detection.confidence
+        self.class_name = detection.class_name
         
         cx = (self.box[0] + self.box[2]) / 2.0
         cy = (self.box[1] + self.box[3]) / 2.0
@@ -70,7 +72,6 @@ class TrackedObject:
 
     @property
     def is_stationary(self) -> bool:
-        # If active for > 5 seconds but net displacement in last 5s is < 0.03
         if self.dwell_duration < 4.0:
             return False
         if len(self.trajectory) < 10:
@@ -80,38 +81,9 @@ class TrackedObject:
         net_disp = math.hypot(curr_cx - oldest_cx, curr_cy - oldest_cy)
         return net_disp < 0.04
 
-    def predict(self, dt: float) -> Detection:
-        """Projects bounding box and centroid forward based on velocity vector for smooth 30 FPS playback."""
-        # Clamp extrapolation delta to prevent overshoot on stops
-        dt_clamped = min(0.6, max(0.0, dt))
-        dx = self.velocity[0] * dt_clamped
-        dy = self.velocity[1] * dt_clamped
-        
-        dx = max(-0.06, min(0.06, dx))
-        dy = max(-0.06, min(0.06, dy))
-
-        x1 = max(0.0, min(0.98, self.box[0] + dx))
-        y1 = max(0.0, min(0.98, self.box[1] + dy))
-        x2 = max(x1 + 0.02, min(1.0, self.box[2] + dx))
-        y2 = max(y1 + 0.02, min(1.0, self.box[3] + dy))
-
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-
-        return Detection(
-            class_name=self.class_name,
-            confidence=self.confidence,
-            box=[x1, y1, x2, y2],
-            track_id=self.track_id,
-            attributes={
-                "centroid": (cx, cy),
-                "velocity": self.velocity,
-                "dwell_sec": round(self.dwell_duration, 1),
-                "is_stationary": self.is_stationary,
-                "pacing_count": self.direction_reversals,
-                "trajectory": [(round(p[0], 3), round(p[1], 3)) for p in self.trajectory[-15:]]
-            }
-        )
+    def predict(self, dt: float = 0.0) -> Detection:
+        """Returns stable ground-truth detection without artificial velocity drift."""
+        return self.to_detection()
 
     def to_detection(self) -> Detection:
         return Detection(
@@ -129,10 +101,9 @@ class TrackedObject:
             }
         )
 
-VEHICLE_FAMILY = {"car", "truck", "bus", "motorcycle", "vehicle", "van", "auto", "train"}
+VEHICLE_FAMILY = {"car", "truck", "bus", "motorcycle", "bicycle", "bike", "scooter", "motorbike", "vehicle", "van", "auto", "train"}
 
 def calculate_iou(boxA: List[float], boxB: List[float]) -> float:
-    # Determine coordinates of intersection rectangle
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -151,7 +122,7 @@ def calculate_iou(boxA: List[float], boxB: List[float]) -> float:
     return inter_area / union_area
 
 class MultiObjectTracker:
-    def __init__(self, max_missed_frames: int = 15, iou_threshold: float = 0.20):
+    def __init__(self, max_missed_frames: int = 10, iou_threshold: float = 0.20):
         self.max_missed_frames = max_missed_frames
         self.iou_threshold = iou_threshold
         self.tracks: Dict[int, TrackedObject] = {}
@@ -165,45 +136,60 @@ class MultiObjectTracker:
         matched_tracks = set()
         matched_detections = set()
 
-        # Match existing tracks with detections based on IOU, predicted IOU, and spatial proximity
+        # Pass 1: Primary IoU matching
         for det_idx, det in enumerate(detections):
-            best_score = 0.0
+            best_iou = 0.0
             best_track_id = None
-            d_cx = (det.box[0] + det.box[2]) / 2.0
-            d_cy = (det.box[1] + det.box[3]) / 2.0
 
             for track_id, track in self.tracks.items():
                 if track_id in matched_tracks:
                     continue
 
-                # Class compatibility: allow exact match or vehicle superclass match
                 class_matches = (track.class_name == det.class_name) or (
                     track.class_name in VEHICLE_FAMILY and det.class_name in VEHICLE_FAMILY
                 )
                 if not class_matches:
                     continue
 
-                # 1. Direct bounding box IoU
                 iou = calculate_iou(track.box, det.box)
-
-                # 2. Velocity-projected bounding box IoU (for fast moving vehicles)
-                pred_det = track.predict(0.05)
-                pred_iou = calculate_iou(pred_det.box, det.box)
-                effective_iou = max(iou, pred_iou)
-
-                # 3. Spatial centroid distance
-                t_cx, t_cy = track.centroid
-                c_dist = math.hypot(d_cx - t_cx, d_cy - t_cy)
-                
-                # Proximity score (1.0 - normalized distance)
-                prox_score = max(0.0, 1.0 - (c_dist / 0.20)) if c_dist < 0.20 else 0.0
-                combined_score = max(effective_iou, prox_score * 0.75)
-
-                if combined_score > best_score:
-                    best_score = combined_score
+                if iou > best_iou:
+                    best_iou = iou
                     best_track_id = track_id
 
-            if best_track_id is not None and best_score >= self.iou_threshold:
+            if best_track_id is not None and best_iou >= self.iou_threshold:
+                self.tracks[best_track_id].update(det)
+                matched_tracks.add(best_track_id)
+                matched_detections.add(det_idx)
+
+        # Pass 2: Proximity fallback matching for fast-moving targets
+        for det_idx, det in enumerate(detections):
+            if det_idx in matched_detections:
+                continue
+            det_cx = (det.box[0] + det.box[2]) / 2.0
+            det_cy = (det.box[1] + det.box[3]) / 2.0
+            det_area = max(1e-5, (det.box[2] - det.box[0]) * (det.box[3] - det.box[1]))
+
+            best_dist = 0.12  # Within 12% screen radius
+            best_track_id = None
+            for track_id, track in self.tracks.items():
+                if track_id in matched_tracks:
+                    continue
+                class_matches = (track.class_name == det.class_name) or (
+                    track.class_name in VEHICLE_FAMILY and det.class_name in VEHICLE_FAMILY
+                )
+                if not class_matches:
+                    continue
+                trk_area = max(1e-5, (track.box[2] - track.box[0]) * (track.box[3] - track.box[1]))
+                area_ratio = det_area / trk_area
+                if not (0.40 <= area_ratio <= 2.5):
+                    continue
+
+                dist = math.hypot(det_cx - track.centroid[0], det_cy - track.centroid[1])
+                if dist < best_dist:
+                    best_dist = dist
+                    best_track_id = track_id
+
+            if best_track_id is not None:
                 self.tracks[best_track_id].update(det)
                 matched_tracks.add(best_track_id)
                 matched_detections.add(det_idx)
@@ -220,19 +206,17 @@ class MultiObjectTracker:
         for t_id in dead_tracks:
             del self.tracks[t_id]
 
-        # Return active detections (including 1-frame grace prediction to prevent flicker)
+        # Return active detections
         result: List[Detection] = []
         for track in self.tracks.values():
-            if track.missed_frames == 0:
+            if track.missed_frames <= 1:
                 result.append(track.to_detection())
-            elif track.missed_frames == 1:
-                result.append(track.predict(0.03))
         return result
 
-    def predict_all(self, dt: float) -> List[Detection]:
-        """Returns forward-projected detections for intermediate frames between detector updates."""
+    def predict_all(self, dt: float = 0.0) -> List[Detection]:
+        """Returns stable ground-truth positions for intermediate frames."""
         res: List[Detection] = []
         for track in self.tracks.values():
-            if track.missed_frames <= 2:
-                res.append(track.predict(dt))
+            if track.missed_frames <= 1:
+                res.append(track.to_detection())
         return res

@@ -25,6 +25,15 @@ class Detection:
         self.track_id = int(track_id)
         self.attributes = attributes or {}
 
+    def copy(self) -> 'Detection':
+        return Detection(
+            class_name=self.class_name,
+            confidence=self.confidence,
+            box=list(self.box),
+            track_id=self.track_id,
+            attributes=dict(self.attributes)
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "class_name": self.class_name,

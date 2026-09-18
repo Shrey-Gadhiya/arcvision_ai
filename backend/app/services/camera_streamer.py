@@ -893,6 +893,18 @@ class CameraStreamer:
                 if obs_list:
                     self._dispatch_task(self._ingest_cross_camera_task(obs_list))
 
+            # 7. Automatic Tracked Object Snapshot Capture for Review Stream
+            if tracked and (frame_num % 3 == 0):
+                annotated_f = self._annotate_frame(frame.copy(), tracked)
+                new_snaps = snapshot_manager.process_frame_detections(
+                    camera_id=self.camera_id,
+                    clean_frame=frame,
+                    annotated_frame=annotated_f,
+                    tracked_detections=tracked
+                )
+                if new_snaps:
+                    self._dispatch_task(self._save_snapshots_task(new_snaps))
+
             self._last_inference_time = time.time()
             with self._lock:
                 self.latest_detections = tracked

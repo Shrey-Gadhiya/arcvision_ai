@@ -6,11 +6,17 @@ import {
   LayoutGrid,
   List,
   Clock,
-  Maximize2
+  Maximize2,
+  User,
+  Car,
+  Bike,
+  Truck,
+  Tag,
+  RefreshCw
 } from 'lucide-react';
 import { Camera, TrackedSnapshot } from '../types';
 import { nvrApi } from '../api/nvr';
-import { API_BASE_URL } from '../api/client';
+import { API_BASE_URL, wsManager } from '../api/client';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 
@@ -29,6 +35,14 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
   const [imageFit, setImageFit] = useState<'contain' | 'cover'>('contain');
   const [selectedModalSnap, setSelectedModalSnap] = useState<TrackedSnapshot | null>(null);
   const [modalViewMode, setModalViewMode] = useState<'crop' | 'annotated' | 'clean'>('crop');
+  const [categories, setCategories] = useState<{
+    all: number;
+    person: number;
+    car: number;
+    motorcycle: number;
+    truck: number;
+    other: number;
+  }>({ all: 0, person: 0, car: 0, motorcycle: 0, truck: 0, other: 0 });
 
   const fetchFeed = () => {
     setIsLoading(true);
@@ -40,10 +54,13 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
         camera_id: camId,
         object_class: objCls,
         min_confidence: minConfidence,
-        limit: 50
+        limit: 80
       })
       .then((res) => {
         setSnapshots(res.snapshots || []);
+        if (res.categories) {
+          setCategories(res.categories);
+        }
       })
       .catch((err) => {
         console.error('Failed to load review snapshots:', err);
@@ -55,9 +72,58 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
 
   useEffect(() => {
     fetchFeed();
-    const interval = setInterval(fetchFeed, 8000);
-    return () => clearInterval(interval);
+    wsManager.connect();
+    const unsubSnap = wsManager.on('snapshot:new', () => {
+      fetchFeed();
+    });
+    const interval = setInterval(fetchFeed, 3000);
+    return () => {
+      unsubSnap();
+      clearInterval(interval);
+    };
   }, [selectedCameraId, selectedClass, minConfidence]);
+
+  const getObjectClassBadge = (objectClass: string, trackId: number) => {
+    const cls = objectClass.toLowerCase();
+    if (cls === 'person' || cls === 'human' || cls === 'pedestrian') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950/90 text-amber-300 border border-amber-800 font-bold backdrop-blur-xs shadow">
+          <User className="w-3 h-3" />
+          PERSON #{trackId}
+        </span>
+      );
+    }
+    if (cls === 'car' || cls === 'van' || cls === 'auto' || cls === 'vehicle') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-950/90 text-emerald-300 border border-emerald-800 font-bold backdrop-blur-xs shadow">
+          <Car className="w-3 h-3" />
+          CAR #{trackId}
+        </span>
+      );
+    }
+    if (cls === 'motorcycle' || cls === 'bike' || cls === 'bicycle' || cls === 'scooter' || cls === 'motorbike') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-950/90 text-cyan-300 border border-cyan-800 font-bold backdrop-blur-xs shadow">
+          <Bike className="w-3 h-3" />
+          BIKE #{trackId}
+        </span>
+      );
+    }
+    if (cls === 'truck' || cls === 'bus' || cls === 'train') {
+      return (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-950/90 text-blue-300 border border-blue-800 font-bold backdrop-blur-xs shadow">
+          <Truck className="w-3 h-3" />
+          TRUCK #{trackId}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900/90 text-zinc-300 border border-zinc-700 font-medium backdrop-blur-xs shadow">
+        <Tag className="w-3 h-3" />
+        {objectClass.toUpperCase()} #{trackId}
+      </span>
+    );
+  };
 
   const cameraMap = useMemo(() => {
     const map = new Map<number, Camera>();
@@ -174,9 +240,107 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
           </select>
 
           <Button variant="secondary" size="sm" onClick={fetchFeed} className="text-xs">
+            <RefreshCw className="w-3 h-3" />
             Refresh
           </Button>
         </div>
+      </div>
+
+      {/* Category Filter Pills Toolbar */}
+      <div className="flex flex-wrap items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-md p-2 shadow-xs">
+        <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider pl-1 pr-2 border-r border-zinc-800 hidden sm:inline">
+          Categories:
+        </span>
+
+        <button
+          onClick={() => setSelectedClass('ALL')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'ALL'
+              ? 'bg-white text-black shadow'
+              : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white border border-zinc-800'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          All Objects
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'ALL' ? 'bg-black text-white' : 'bg-zinc-800 text-zinc-300'}`}>
+            {categories.all}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setSelectedClass('person')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'person'
+              ? 'bg-amber-500 text-black shadow font-bold'
+              : 'bg-zinc-900 text-amber-300 hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <User className="w-3.5 h-3.5" />
+          Persons
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'person' ? 'bg-black text-amber-300' : 'bg-zinc-800 text-amber-300'}`}>
+            {categories.person}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setSelectedClass('car')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'car'
+              ? 'bg-emerald-500 text-black shadow font-bold'
+              : 'bg-zinc-900 text-emerald-300 hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Car className="w-3.5 h-3.5" />
+          Cars & Vehicles
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'car' ? 'bg-black text-emerald-300' : 'bg-zinc-800 text-emerald-300'}`}>
+            {categories.car}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setSelectedClass('motorcycle')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'motorcycle'
+              ? 'bg-cyan-500 text-black shadow font-bold'
+              : 'bg-zinc-900 text-cyan-300 hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Bike className="w-3.5 h-3.5" />
+          Bikes & Scooters
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'motorcycle' ? 'bg-black text-cyan-300' : 'bg-zinc-800 text-cyan-300'}`}>
+            {categories.motorcycle}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setSelectedClass('truck')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'truck'
+              ? 'bg-blue-500 text-black shadow font-bold'
+              : 'bg-zinc-900 text-blue-300 hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Truck className="w-3.5 h-3.5" />
+          Trucks & Heavy
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'truck' ? 'bg-black text-blue-300' : 'bg-zinc-800 text-blue-300'}`}>
+            {categories.truck}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setSelectedClass('other')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            selectedClass === 'other'
+              ? 'bg-purple-500 text-black shadow font-bold'
+              : 'bg-zinc-900 text-purple-300 hover:bg-zinc-800 border border-zinc-800'
+          }`}
+        >
+          <Tag className="w-3.5 h-3.5" />
+          Other Objects
+          <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${selectedClass === 'other' ? 'bg-black text-purple-300' : 'bg-zinc-800 text-purple-300'}`}>
+            {categories.other}
+          </span>
+        </button>
       </div>
 
       {/* Snapshots Content */}
@@ -225,9 +389,7 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
                   {/* Metadata and Context */}
                   <div className="space-y-1.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="neutral">
-                        {snap.object_class.toUpperCase()} #{snap.track_id}
-                      </Badge>
+                      {getObjectClassBadge(snap.object_class, snap.track_id)}
                       <span className="font-semibold text-white text-xs truncate">
                         {cam?.name || `Camera #${snap.camera_id}`}
                       </span>
@@ -310,9 +472,7 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
 
                   {/* Class Badge Top-Left */}
                   <div className="absolute top-2 left-2 flex items-center gap-1 z-10">
-                    <Badge variant="neutral">
-                      {snap.object_class.toUpperCase()} #{snap.track_id}
-                    </Badge>
+                    {getObjectClassBadge(snap.object_class, snap.track_id)}
                   </div>
 
                   {/* Confidence Badge Top-Right */}
@@ -404,7 +564,8 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
               <div>
                 <h3 className="text-sm font-semibold text-white uppercase tracking-wider flex items-center gap-2">
                   <Eye className="w-4 h-4 text-white" />
-                  Tracked Object #{selectedModalSnap.track_id} — {selectedModalSnap.object_class.toUpperCase()}
+                  <span>Tracked Object #{selectedModalSnap.track_id}</span>
+                  {getObjectClassBadge(selectedModalSnap.object_class, selectedModalSnap.track_id)}
                 </h3>
                 <span className="text-xs text-zinc-400 font-mono">
                   {new Date(selectedModalSnap.timestamp).toLocaleString()} • Confidence: {Math.round(selectedModalSnap.confidence * 100)}%

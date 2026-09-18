@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, and_, desc
+from sqlalchemy import select, and_, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,14 +22,29 @@ async def list_snapshots(
     offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
-    """Queries tracked object best-frame snapshots."""
+    """Queries tracked object best-frame snapshots with flexible categorization."""
     stmt = select(TrackedSnapshot).order_by(desc(TrackedSnapshot.timestamp))
 
     filters = []
     if camera_id is not None:
         filters.append(TrackedSnapshot.camera_id == camera_id)
-    if object_class:
-        filters.append(TrackedSnapshot.object_class == object_class.lower())
+    if object_class and object_class.upper() != "ALL":
+        cls_lower = object_class.lower()
+        if cls_lower in ["vehicle", "vehicles"]:
+            filters.append(TrackedSnapshot.object_class.in_(["car", "truck", "bus", "motorcycle", "bicycle", "bike", "van", "auto"]))
+        elif cls_lower in ["car", "cars"]:
+            filters.append(TrackedSnapshot.object_class.in_(["car", "van", "auto", "vehicle"]))
+        elif cls_lower in ["motorcycle", "motorcycles", "bike", "bikes"]:
+            filters.append(TrackedSnapshot.object_class.in_(["motorcycle", "bike", "bicycle", "scooter", "motorbike"]))
+        elif cls_lower in ["truck", "trucks", "heavy", "bus"]:
+            filters.append(TrackedSnapshot.object_class.in_(["truck", "bus", "train"]))
+        elif cls_lower in ["person", "persons", "pedestrian"]:
+            filters.append(TrackedSnapshot.object_class.in_(["person", "human", "pedestrian"]))
+        elif cls_lower in ["other", "others"]:
+            filters.append(~TrackedSnapshot.object_class.in_(["person", "human", "pedestrian", "car", "van", "auto", "vehicle", "motorcycle", "bike", "bicycle", "scooter", "motorbike", "truck", "bus", "train"]))
+        else:
+            filters.append(TrackedSnapshot.object_class == cls_lower)
+
     if min_confidence is not None:
         filters.append(TrackedSnapshot.confidence >= min_confidence)
     if start_time:
@@ -51,6 +66,22 @@ async def list_snapshots(
     stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     snaps = result.scalars().all()
+
+    # Category counts summary across all active objects
+    count_stmt = select(TrackedSnapshot.object_class, func.count(TrackedSnapshot.id)).group_by(TrackedSnapshot.object_class)
+    if camera_id is not None:
+        count_stmt = count_stmt.where(TrackedSnapshot.camera_id == camera_id)
+    c_res = await db.execute(count_stmt)
+    raw_counts = dict(c_res.all())
+
+    category_summary = {
+        "all": sum(raw_counts.values()),
+        "person": sum(v for k, v in raw_counts.items() if k in ["person", "human", "pedestrian"]),
+        "car": sum(v for k, v in raw_counts.items() if k in ["car", "van", "auto", "vehicle"]),
+        "motorcycle": sum(v for k, v in raw_counts.items() if k in ["motorcycle", "bike", "bicycle", "scooter", "motorbike"]),
+        "truck": sum(v for k, v in raw_counts.items() if k in ["truck", "bus", "train"]),
+        "other": sum(v for k, v in raw_counts.items() if k not in ["person", "human", "pedestrian", "car", "van", "auto", "vehicle", "motorcycle", "bike", "bicycle", "scooter", "motorbike", "truck", "bus", "train"])
+    }
 
     output = []
     for s in snaps:
@@ -79,6 +110,7 @@ async def list_snapshots(
         "count": len(output),
         "limit": limit,
         "offset": offset,
+        "categories": category_summary,
         "snapshots": output
     }
 

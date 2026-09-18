@@ -93,7 +93,15 @@ class SnapshotManager:
             if track_id is None or track_id < 0:
                 continue
 
-            obj_class = getattr(det, "class_name", "object")
+            raw_class = getattr(det, "class_name", "object").lower()
+            if raw_class in ["human", "pedestrian"]:
+                obj_class = "person"
+            elif raw_class in ["van", "auto"]:
+                obj_class = "car"
+            elif raw_class in ["bike", "scooter", "motorbike"]:
+                obj_class = "motorcycle"
+            else:
+                obj_class = raw_class
             conf = getattr(det, "confidence", 0.5)
             box = getattr(det, "box", [0, 0, 0, 0])
 
@@ -189,20 +197,64 @@ class SnapshotManager:
                 return
 
         try:
+            from app.core.event_bus import event_bus
+            from sqlalchemy import desc
+
             for snap_data in snapshots:
-                record = TrackedSnapshot(
-                    camera_id=snap_data["camera_id"],
-                    track_id=snap_data["track_id"],
-                    object_class=snap_data["object_class"],
-                    confidence=snap_data["confidence"],
-                    clean_image_path=snap_data["clean_image_path"],
-                    annotated_image_path=snap_data["annotated_image_path"],
-                    crop_image_path=snap_data["crop_image_path"],
-                    box_json=snap_data["box_json"],
-                    quality_score=snap_data["quality_score"],
-                    timestamp=snap_data["timestamp"]
+                c_id = snap_data["camera_id"]
+                t_id = snap_data["track_id"]
+                
+                # Check if recent record exists for this track
+                existing_q = await session.execute(
+                    select(TrackedSnapshot).where(
+                        TrackedSnapshot.camera_id == c_id,
+                        TrackedSnapshot.track_id == t_id
+                    ).order_by(desc(TrackedSnapshot.id))
                 )
-                session.add(record)
+                existing_snap = existing_q.scalars().first()
+
+                if existing_snap:
+                    existing_snap.confidence = snap_data["confidence"]
+                    existing_snap.clean_image_path = snap_data["clean_image_path"]
+                    existing_snap.annotated_image_path = snap_data["annotated_image_path"]
+                    existing_snap.crop_image_path = snap_data["crop_image_path"]
+                    existing_snap.box_json = snap_data["box_json"]
+                    existing_snap.quality_score = snap_data["quality_score"]
+                    existing_snap.timestamp = snap_data["timestamp"]
+                    out_id = existing_snap.id
+                else:
+                    record = TrackedSnapshot(
+                        camera_id=c_id,
+                        track_id=t_id,
+                        object_class=snap_data["object_class"],
+                        confidence=snap_data["confidence"],
+                        clean_image_path=snap_data["clean_image_path"],
+                        annotated_image_path=snap_data["annotated_image_path"],
+                        crop_image_path=snap_data["crop_image_path"],
+                        box_json=snap_data["box_json"],
+                        quality_score=snap_data["quality_score"],
+                        timestamp=snap_data["timestamp"]
+                    )
+                    session.add(record)
+                    await session.flush()
+                    out_id = record.id
+
+                try:
+                    await event_bus.publish("snapshot:new", {
+                        "id": out_id,
+                        "camera_id": c_id,
+                        "track_id": t_id,
+                        "object_class": snap_data["object_class"],
+                        "confidence": snap_data["confidence"],
+                        "crop_image_path": snap_data["crop_image_path"],
+                        "annotated_image_path": snap_data["annotated_image_path"],
+                        "clean_image_path": snap_data["clean_image_path"],
+                        "quality_score": snap_data["quality_score"],
+                        "timestamp": snap_data["timestamp"].isoformat()
+                    })
+                except Exception:
+                    pass
+
             await session.commit()
         except Exception as e:
             await session.rollback()

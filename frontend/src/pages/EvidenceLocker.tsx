@@ -16,10 +16,11 @@ import {
   Tag,
   Car,
   UserCheck,
+  User,
   FileCheck2
 } from 'lucide-react';
 import { Evidence, EvidencePackageExportResponse, EvidencePackageVerifyResponse } from '../types';
-import { apiClient, getMediaUrl } from '../api/client';
+import { apiClient, getMediaUrl, wsManager } from '../api/client';
 import { nvrApi } from '../api/nvr';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
@@ -65,6 +66,19 @@ export const EvidenceLocker: React.FC = () => {
 
   useEffect(() => {
     fetchEvidence();
+    wsManager.connect();
+    const unsubEvidence = wsManager.on('evidence:new', () => {
+      fetchEvidence();
+    });
+    const unsubIncident = wsManager.on('incident:new', () => {
+      fetchEvidence();
+    });
+    const interval = setInterval(fetchEvidence, 4000);
+    return () => {
+      unsubEvidence();
+      unsubIncident();
+      clearInterval(interval);
+    };
   }, []);
 
   const handleVerify = async (evId: number) => {
@@ -162,6 +176,13 @@ export const EvidenceLocker: React.FC = () => {
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
             <Car className="w-3 h-3" />
             PLATE CROP
+          </span>
+        );
+      case 'CROP_PERSON':
+        return (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950 text-amber-300 border border-amber-800 font-bold">
+            <User className="w-3 h-3" />
+            PERSON CROP
           </span>
         );
       case 'CROP_FACE':
@@ -381,6 +402,13 @@ export const EvidenceLocker: React.FC = () => {
             className={`px-2 py-1 rounded text-xs flex items-center gap-1 transition-colors ${typeFilter === 'CROP_PLATE' ? 'bg-emerald-500 text-black font-bold' : 'bg-zinc-900 text-emerald-300 hover:bg-zinc-800 border border-zinc-800'}`}
           >
             <Car className="w-3 h-3" /> Plate Crops ({evidence.filter(e => e.file_type === 'CROP_PLATE').length})
+          </button>
+
+          <button
+            onClick={() => setTypeFilter('CROP_PERSON')}
+            className={`px-2 py-1 rounded text-xs flex items-center gap-1 transition-colors ${typeFilter === 'CROP_PERSON' ? 'bg-amber-500 text-black font-bold' : 'bg-zinc-900 text-amber-300 hover:bg-zinc-800 border border-zinc-800'}`}
+          >
+            <User className="w-3 h-3" /> Person Crops ({evidence.filter(e => e.file_type === 'CROP_PERSON').length})
           </button>
 
           <button

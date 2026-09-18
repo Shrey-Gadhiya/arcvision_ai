@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
 
+from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.event_bus import event_bus
@@ -71,6 +72,7 @@ class CameraStreamer:
         self.latest_motion_score: float = 0.0
         self._vehicle_plate_cache: Dict[int, Dict[str, Any]] = {}
         self._person_face_cache: Dict[int, Dict[str, Any]] = {}
+        self._zone_person_evidence_cache: Dict[Tuple[int, int], float] = {}
         self._in_flight_ocr_tracks: set = set()
         self._ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"Cam{self.camera_id}_OCR")
         
@@ -164,6 +166,191 @@ class CameraStreamer:
                     )
                 except Exception as e:
                     logger.debug(f"Cross camera ingestion error: {e}")
+
+    def _capture_person_zone_evidence(
+        self,
+        track_id: int,
+        box: List[float],
+        confidence: float,
+        zone: Dict[str, Any],
+        full_frame: np.ndarray
+    ):
+        """
+        Captures clean cropped photo of a person inside a marked security zone,
+        computes SHA-256 cryptographic non-tampering hash, persists Evidence records,
+        associates an Incident, logs an Audit trail, and broadcasts over WebSocket.
+        """
+        try:
+            if full_frame is None or full_frame.size == 0:
+                return
+
+            h, w = full_frame.shape[:2]
+            x1_norm, y1_norm, x2_norm, y2_norm = box
+            bw = x2_norm - x1_norm
+            bh = y2_norm - y1_norm
+
+            # 8% padding to ensure complete head-to-toe person capture
+            pad_x = bw * 0.08
+            pad_y = bh * 0.08
+
+            px1 = max(0, int((x1_norm - pad_x) * w))
+            py1 = max(0, int((y1_norm - pad_y) * h))
+            px2 = min(w, int((x2_norm + pad_x) * w))
+            py2 = min(h, int((y2_norm + pad_y) * h))
+
+            if px2 <= px1 or py2 <= py1:
+                return
+
+            crop = full_frame[py1:py2, px1:px2]
+            if crop.size == 0:
+                return
+
+            from app.services.recording_engine import compute_sha256
+            ts_str = time.strftime("%Y%m%d_%H%M%S")
+            ms_str = int(time.time() * 1000) % 1000
+            zone_id = zone.get("id", 0)
+            zone_name = zone.get("name", f"Zone_{zone_id}")
+            clean_zname = "".join(c for c in zone_name if c.isalnum() or c in ('_', '-'))
+
+            crop_filename = f"crop_person_cam{self.camera_id}_trk{track_id}_{clean_zname}_{ts_str}_{ms_str}.jpg"
+            crop_path = settings.EVIDENCE_DIR / crop_filename
+            cv2.imwrite(str(crop_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            crop_sha256 = compute_sha256(crop_path)
+            crop_size = crop_path.stat().st_size
+            crop_url = f"/evidence/{crop_filename}"
+
+            snap_filename = f"snap_person_zone_cam{self.camera_id}_trk{track_id}_{clean_zname}_{ts_str}_{ms_str}.jpg"
+            snap_path = settings.EVIDENCE_DIR / snap_filename
+            cv2.imwrite(str(snap_path), full_frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            snap_sha256 = compute_sha256(snap_path)
+            snap_size = snap_path.stat().st_size
+            snap_url = f"/evidence/{snap_filename}"
+
+            cam_id = self.camera_id
+            cam_name = self.camera_name
+
+            async def _persist():
+                async with AsyncSessionLocal() as session:
+                    try:
+                        from app.models.incident import Incident, IncidentSeverity, IncidentStatus
+                        from app.models.evidence import Evidence, EvidenceType
+                        from app.models.audit import AuditLog
+                        from app.models.camera import Camera
+
+                        # Verify camera existence
+                        cam_check = await session.execute(select(Camera.id).where(Camera.id == cam_id))
+                        if not cam_check.scalars().first():
+                            return
+
+                        # Generate Incident
+                        inc_code = f"INC-ZONE-{cam_id}-{int(time.time()) % 100000}-{track_id}"
+                        inc = Incident(
+                            incident_code=inc_code,
+                            title=f"Zone Intrusion: Person in {zone_name}",
+                            summary=f"Person (Track #{track_id}, confidence {confidence:.2f}) detected in marked zone '{zone_name}' on {cam_name}",
+                            incident_type="ZONE_INTRUSION",
+                            camera_id=cam_id,
+                            track_id=track_id,
+                            severity=IncidentSeverity.HIGH,
+                            status=IncidentStatus.DETECTED,
+                            threat_score=85.0,
+                            location_name=cam_name,
+                            tags_json=json.dumps(["ZONE_INTRUSION", "PERSON", zone_name, f"track_{track_id}"])
+                        )
+                        session.add(inc)
+                        await session.flush()
+
+                        # Person Crop Evidence
+                        crop_ev = Evidence(
+                            incident_id=inc.id,
+                            camera_id=cam_id,
+                            file_type=EvidenceType.CROP_PERSON,
+                            file_path=crop_url,
+                            file_size_bytes=crop_size,
+                            sha256_hash=crop_sha256,
+                            metadata_json=json.dumps({
+                                "type": "ZONE_PERSON_CROP",
+                                "zone_id": zone_id,
+                                "zone_name": zone_name,
+                                "track_id": track_id,
+                                "confidence": round(float(confidence), 3),
+                                "box": [round(float(v), 4) for v in box],
+                                "resolution": f"{crop.shape[1]}x{crop.shape[0]}"
+                            })
+                        )
+                        session.add(crop_ev)
+
+                        # Full Frame Snapshot Evidence
+                        snap_ev = Evidence(
+                            incident_id=inc.id,
+                            camera_id=cam_id,
+                            file_type=EvidenceType.SNAPSHOT,
+                            file_path=snap_url,
+                            file_size_bytes=snap_size,
+                            sha256_hash=snap_sha256,
+                            metadata_json=json.dumps({
+                                "type": "ZONE_INTRUSION_SNAPSHOT",
+                                "zone_id": zone_id,
+                                "zone_name": zone_name,
+                                "track_id": track_id
+                            })
+                        )
+                        session.add(snap_ev)
+
+                        # Audit Log
+                        audit = AuditLog(
+                            username="SYSTEM_AI",
+                            user_role="SYSTEM",
+                            action="ZONE_PERSON_EVIDENCE_CAPTURED",
+                            resource_type="EVIDENCE",
+                            resource_id=f"INC-{inc.id}",
+                            details_json=json.dumps({
+                                "camera_id": cam_id,
+                                "track_id": track_id,
+                                "zone_name": zone_name,
+                                "crop_path": crop_url,
+                                "sha256": crop_sha256
+                            })
+                        )
+                        session.add(audit)
+                        await session.commit()
+                        await session.refresh(crop_ev)
+
+                        # Broadcast WebSocket notifications
+                        await event_bus.publish("evidence:new", {
+                            "id": crop_ev.id,
+                            "incident_id": inc.id,
+                            "camera_id": cam_id,
+                            "file_type": "CROP_PERSON",
+                            "file_path": crop_url,
+                            "sha256_hash": crop_sha256,
+                            "zone_name": zone_name,
+                            "track_id": track_id
+                        })
+                        await event_bus.publish("incident:new", {
+                            "id": inc.id,
+                            "incident_code": inc_code,
+                            "title": inc.title,
+                            "summary": inc.summary,
+                            "severity": inc.severity.value,
+                            "camera_id": cam_id,
+                            "threat_score": inc.threat_score
+                        })
+                        await event_bus.publish("zone:intrusion", {
+                            "camera_id": cam_id,
+                            "zone_name": zone_name,
+                            "track_id": track_id,
+                            "crop_url": crop_url
+                        })
+                        logger.info(f"Captured person zone evidence: {crop_url} (SHA-256: {crop_sha256[:16]}...) for track #{track_id} in zone '{zone_name}'")
+                    except Exception as ex:
+                        await session.rollback()
+                        logger.error(f"Error persisting person zone evidence: {ex}", exc_info=True)
+
+            self._dispatch_task(_persist())
+
+        except Exception as e:
+            logger.error(f"Error capturing person zone evidence for camera #{self.camera_id}: {e}", exc_info=True)
 
     def update_config(self, zones: List[Dict[str, Any]] = None, tripwires: List[Dict[str, Any]] = None, rules: List[Any] = None, anpr_enabled: Optional[bool] = None):
         with self._lock:
@@ -542,6 +729,41 @@ class CameraStreamer:
                         det.attributes["face_name"] = cached_f.get("face_name")
                         if cached_f.get("is_matched"):
                             det.attributes["is_matched"] = True
+
+                    # Multi-point zone occupancy test for persons & automatic cropped evidence capture
+                    if self.zones:
+                        bx1, by1, bx2, by2 = det.box
+                        cx = (bx1 + bx2) / 2.0
+                        cy = (by1 + by2) / 2.0
+                        feet_y = min(1.0, by2 - 0.01)
+                        mid_y = by1 + (by2 - by1) * 0.65
+
+                        check_pts = [(cx, cy), (cx, feet_y), (cx, mid_y)]
+                        person_zones = []
+                        for z in self.zones:
+                            pts = z.get("points") or z.get("polygon") or []
+                            if any(zone_engine.point_in_polygon(pt, pts) for pt in check_pts):
+                                person_zones.append(z)
+
+                        if person_zones:
+                            for pz in person_zones:
+                                if pz not in active_z:
+                                    active_z.append(pz)
+
+                            now_ts = time.time()
+                            for pz in person_zones:
+                                z_id = pz.get("id", 0)
+                                cache_key = (det.track_id, z_id)
+                                last_cap = self._zone_person_evidence_cache.get(cache_key, 0.0)
+                                if (now_ts - last_cap) > 20.0:
+                                    self._zone_person_evidence_cache[cache_key] = now_ts
+                                    self._capture_person_zone_evidence(
+                                        track_id=det.track_id,
+                                        box=det.box,
+                                        confidence=det.confidence,
+                                        zone=pz,
+                                        full_frame=frame.copy()
+                                    )
 
                 if self.anpr_enabled and det.class_name in VEHICLE_TYPES:
                     vx1, vy1 = max(0, int(det.box[0] * w_orig)), max(0, int(det.box[1] * h_orig))

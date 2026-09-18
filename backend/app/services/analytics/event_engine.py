@@ -148,6 +148,21 @@ class EventEngine:
                                 )
                                 session.add(clip_ev)
 
+                            if "crop" in evidence_dict and evidence_dict["crop"]:
+                                cr = evidence_dict["crop"]
+                                cr_type_str = cr.get("file_type", "CROP_PERSON")
+                                cr_type = EvidenceType[cr_type_str] if cr_type_str in EvidenceType.__members__ else EvidenceType.CROP_PERSON
+                                crop_ev = Evidence(
+                                    incident_id=db_inc.id,
+                                    camera_id=camera_id,
+                                    file_type=cr_type,
+                                    file_path=cr.get("file_path", ""),
+                                    file_size_bytes=cr.get("file_size_bytes", 0),
+                                    sha256_hash=cr.get("sha256_hash", ""),
+                                    metadata_json=json.dumps(cr.get("metadata", {}))
+                                )
+                                session.add(crop_ev)
+
                         await session.commit()
                         correlated_incident = incident_candidate
                         incident_candidate["db_id"] = db_inc.id

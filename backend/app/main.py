@@ -83,15 +83,54 @@ async def lifespan(app: FastAPI):
         if not cams:
             logger.info("Clean system — no cameras configured. Add cameras via the UI.")
         else:
+            from app.models.zone import Zone, Tripwire
+            import json
             for c in cams:
                 if c.is_active:
+                    z_res = await session.execute(select(Zone).where(Zone.camera_id == c.id, Zone.is_active == True))
+                    db_zones = z_res.scalars().all()
+                    parsed_zones = []
+                    for z in db_zones:
+                        try:
+                            pts = json.loads(z.points_json)
+                            parsed_zones.append({
+                                "id": z.id,
+                                "name": z.name,
+                                "zone_type": z.zone_type.value,
+                                "points": [(p["x"], p["y"]) if isinstance(p, dict) else (p[0], p[1]) for p in pts],
+                                "loitering_time_sec": z.loitering_time_sec
+                            })
+                        except Exception:
+                            pass
+
+                    tw_res = await session.execute(select(Tripwire).where(Tripwire.camera_id == c.id, Tripwire.is_active == True))
+                    db_tw = tw_res.scalars().all()
+                    parsed_tw = []
+                    for tw in db_tw:
+                        try:
+                            line_data = json.loads(tw.line_json)
+                            parsed_tw.append({
+                                "id": tw.id,
+                                "name": tw.name,
+                                "direction": tw.direction.value,
+                                "line": {
+                                    "start": (line_data["start"]["x"], line_data["start"]["y"]),
+                                    "end": (line_data["end"]["x"], line_data["end"]["y"])
+                                }
+                            })
+                        except Exception:
+                            pass
+
                     stream_manager.start_streamer(
                         camera_id=c.id,
                         camera_name=c.name,
                         stream_url=c.rtsp_url,
                         stream_type=c.stream_type.value,
                         target_fps=c.target_fps,
-                        is_night_mode=c.night_mode_enabled
+                        zones=parsed_zones,
+                        tripwires=parsed_tw,
+                        is_night_mode=c.night_mode_enabled,
+                        anpr_enabled=c.anpr_enabled
                     )
 
     logger.info("ARC VISION Core online and operational.")

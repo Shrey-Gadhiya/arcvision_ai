@@ -31,6 +31,7 @@ export const getMediaUrl = (path?: string): string => {
 
 export const apiClient = axios.create({
   baseURL: API_V1,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -46,6 +47,25 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      const requestUrl = error?.config?.url || '';
+      // Only clear storage and trigger re-auth if it's not the login attempt itself
+      if (!requestUrl.includes('/auth/login') && !requestUrl.includes('/auth/token')) {
+        localStorage.removeItem('arc_token');
+        localStorage.removeItem('arc_user');
+        localStorage.removeItem('arc_role');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('arc_auth_expired'));
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 // WebSocket Real-time Listener
 type EventHandler = (payload: any) => void;

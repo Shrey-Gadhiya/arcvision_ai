@@ -88,6 +88,7 @@ export const App: React.FC = () => {
   };
 
   const fetchInitialData = async () => {
+    if (!isAuthenticated) return;
     try {
       const camRes = await apiClient.get('/cameras/');
       setCameras(camRes.data);
@@ -97,14 +98,23 @@ export const App: React.FC = () => {
 
       const incRes = await apiClient.get('/incidents/');
       setIncidents(incRes.data);
-    } catch (e) {
-      // fallback
+    } catch (e: any) {
+      if (e?.response?.status === 401) {
+        handleLogout();
+      }
     }
   };
 
   useEffect(() => {
-    fetchInitialData();
-    wsManager.connect();
+    const handleAuthExpired = () => {
+      handleLogout();
+    };
+    window.addEventListener('arc_auth_expired', handleAuthExpired);
+
+    if (isAuthenticated) {
+      fetchInitialData();
+      wsManager.connect();
+    }
 
     // Subscribe to real-time incident event
     const unsubIncident = wsManager.on('incident:new', (newInc: Incident) => {
@@ -122,10 +132,11 @@ export const App: React.FC = () => {
     });
 
     return () => {
+      window.removeEventListener('arc_auth_expired', handleAuthExpired);
       unsubIncident();
       unsubStatus();
     };
-  }, [audioEnabled]);
+  }, [isAuthenticated, audioEnabled]);
 
   const handleResetDemo = async () => {
     try {

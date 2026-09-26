@@ -49,18 +49,20 @@ async def login(credentials: LoginRequest, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(credentials.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     
-    user.last_login = datetime.now(timezone.utc)
-    # Log audit
-    audit = AuditLog(
-        username=user.username,
-        user_role=user.role.value,
-        action="USER_LOGIN",
-        resource_type="USER",
-        resource_id=str(user.id),
-        details_json='{"status": "SUCCESS"}'
-    )
-    db.add(audit)
-    await db.commit()
+    try:
+        user.last_login = datetime.now(timezone.utc)
+        audit = AuditLog(
+            username=user.username,
+            user_role=user.role.value,
+            action="USER_LOGIN",
+            resource_type="USER",
+            resource_id=str(user.id),
+            details_json='{"status": "SUCCESS"}'
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        await db.rollback()
 
     token = create_access_token(subject=user.username, role=user.role.value)
     return {

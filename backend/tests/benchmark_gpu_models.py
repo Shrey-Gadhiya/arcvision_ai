@@ -62,11 +62,11 @@ def run_real_model_benchmark(num_cycles: int = 30):
         "models_evaluated": {}
     }
     
-    # 1. Primary Detector: YOLO26m / OpenVINO / CPU
-    print("\n[1/3] Benchmarking Primary Object Detector (YOLO26m / OpenVINO / CPU)...")
+    # 1. Primary Detector: YOLOv8n / OpenVINO / CPU
+    print("\n[1/3] Benchmarking Primary Object Detector (YOLOv8n / OpenVINO / CPU)...")
     model_path = "../yolov8n.pt" if os.path.exists("../yolov8n.pt") else "yolov8n.pt"
     t_load0 = time.perf_counter()
-    detector = YOLODetectorAdapter(name="YOLO26m Primary Detector", model_path=model_path)
+    detector = YOLODetectorAdapter(name="YOLOv8n Perimeter Detector", model_path=model_path)
     t_load_ms = (time.perf_counter() - t_load0) * 1000.0
     
     # Warmup
@@ -81,16 +81,22 @@ def run_real_model_benchmark(num_cycles: int = 30):
         yolo_latencies.append((t1 - t0) * 1000.0)
         
     yolo_stats = calc_stats(yolo_latencies)
-    results["models_evaluated"]["yolo26m_primary_detector"] = {
+    fp = getattr(detector, "fingerprint", None)
+    results["models_evaluated"]["yolov8n_primary_detector"] = {
         "status": "MEASURED",
+        "configured_name": detector.name,
+        "actual_family": fp.actual_family if fp else "YOLOv8",
+        "actual_variant": fp.actual_variant if fp else "YOLOv8n",
+        "parameter_count": fp.parameter_count if fp else 3157200,
         "runtime": detector.runtime,
         "device": detector.device,
         "precision": detector.precision,
+        "weights_sha256": fp.weights_sha256 if fp else "",
         "load_time_ms": round(t_load_ms, 2),
         "cycles": num_cycles,
         "latency_stats": yolo_stats
     }
-    print(f" -> YOLO26m Mean: {yolo_stats['mean_ms']} ms | P95: {yolo_stats['p95_ms']} ms | FPS: {yolo_stats['fps']}")
+    print(f" -> YOLOv8n ({fp.actual_variant if fp else 'v8n'}) Mean: {yolo_stats['mean_ms']} ms | P95: {yolo_stats['p95_ms']} ms | FPS: {yolo_stats['fps']}")
     
     # 2. Modern Face Detector (YuNet ONNX)
     print("\n[2/3] Benchmarking YuNet Face Detector ONNX...")

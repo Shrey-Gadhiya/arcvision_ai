@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import numpy as np
 from app.services.ai.base import BaseDetectorAdapter, Detection, DetectorStatus
+from app.services.ai.fingerprint import fingerprint_model_artifact, ModelFingerprint, RegistryStatus
 
 logger = logging.getLogger("arc_vision.yolo_adapter")
 
@@ -27,8 +28,8 @@ SURVEILLANCE_CLASSES = {
 class YOLODetectorAdapter(BaseDetectorAdapter):
     """
     Modern Model-Agnostic YOLO Detector Adapter.
-    Supports YOLO26/v8/v10/v11 family architectures (Nano, Small, Medium, Large, XLarge).
     Features:
+    - Real Model Fingerprinting directly inspecting weights and parameters
     - Automatic hardware acceleration (TensorRT / PyTorch CUDA FP16 / OpenVINO / CPU)
     - Full model provenance tracking (weights hash, runtime, device, precision)
     - Fast-Path vs Deep-Path dynamic execution
@@ -38,7 +39,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         name: str = "YOLOv8n Detector",
         model_path: str = "yolov8n.pt",
         model_name: Optional[str] = None,
-        model_version: str = "v26.1.0",
+        model_version: str = "v8.4.155",
         device: str = "cpu",
         input_resolution: str = "640x640",
         precision: str = "fp16"
@@ -49,6 +50,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         self.precision = precision
         self.runtime = "PyTorch"
         self.weights_hash = ""
+        self.fingerprint: Optional[ModelFingerprint] = None
         self.model = None
         self.load()
 
@@ -60,7 +62,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                 with open(p, "rb") as f:
                     for chunk in iter(lambda: f.read(65536), b""):
                         h.update(chunk)
-                return h.hexdigest()[:16]
+                return h.hexdigest()
         except Exception:
             pass
         return "sha256-prebuilt"
@@ -91,11 +93,12 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                         model_to_load = str(c)
                         break
 
-            self.weights_hash = self._compute_weights_hash(model_to_load)
+            self.fingerprint = fingerprint_model_artifact(model_to_load)
+            self.weights_hash = self.fingerprint.weights_sha256
             self.model = YOLO(model_to_load)
             self.status = DetectorStatus.LOADED
             self.last_error = None
-            logger.info(f"Successfully loaded YOLO detector '{self.name}' ({self.model_version}) from {model_to_load} on {self.device} [{self.runtime}]")
+            logger.info(f"Loaded {self.fingerprint.actual_variant} ({self.fingerprint.actual_family}, {self.fingerprint.parameter_count} params) from {model_to_load} on {self.device} [{self.runtime}]")
             return True
         except Exception as e:
             self.status = DetectorStatus.ERROR

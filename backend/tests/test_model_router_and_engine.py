@@ -57,10 +57,12 @@ def test_model_manifest_integrity():
     models = data["models"]
     
     # Verify core models registered in manifest
-    assert "yolo26m_primary" in models
+    assert "yolov8n_deployed" in models
+    assert "yolo26m_candidate" in models
     assert "face_detector_yunet" in models
     assert "face_embedding_sface" in models
 
-    assert models["yolo26m_primary"]["status"] == "DEPLOYED"
+    assert models["yolov8n_deployed"]["status"] == "DEPLOYED"
+    assert models["yolo26m_candidate"]["status"] == "AVAILABLE_BUT_NOT_DEPLOYED"
     assert models["face_detector_yunet"]["status"] == "DEPLOYED"
     assert models["face_embedding_sface"]["status"] == "DEPLOYED"

@@ -17,8 +17,7 @@ import {
   Car,
   UserCheck,
   User,
-  FileCheck2,
-  Trash2
+  FileCheck2
 } from 'lucide-react';
 import { Evidence, EvidencePackageExportResponse, EvidencePackageVerifyResponse } from '../types';
 import { apiClient, getMediaUrl, wsManager } from '../api/client';
@@ -116,26 +115,6 @@ export const EvidenceLocker: React.FC = () => {
       alert('Batch evidence verification failed');
     } finally {
       setIsVerifyingAll(false);
-    }
-  };
-
-  const [isPurgingAll, setIsPurgingAll] = useState<boolean>(false);
-
-  const handlePurgeAll = async () => {
-    if (!window.confirm('Are you sure you want to permanently remove ALL captured evidence and snapshots? This action cannot be undone.')) {
-      return;
-    }
-    setIsPurgingAll(true);
-    try {
-      await nvrApi.purgeAllEvidence();
-      setEvidence([]);
-      setBatchVerifySummary(null);
-      setVerificationStatus({});
-      alert('All captured evidence and snapshots have been purged successfully.');
-    } catch (e) {
-      alert('Failed to purge evidence.');
-    } finally {
-      setIsPurgingAll(false);
     }
   };
 
@@ -261,17 +240,6 @@ export const EvidenceLocker: React.FC = () => {
             {isVerifyingAll ? 'Auditing SHA-256 Hashes...' : 'Verify All Evidence'}
           </Button>
 
-          <Button
-            variant="secondary"
-            size="sm"
-            className="!border-red-900/60 !text-red-400 hover:!bg-red-950/40"
-            icon={<Trash2 className="w-3 h-3 text-red-400" />}
-            onClick={handlePurgeAll}
-            disabled={isPurgingAll}
-          >
-            {isPurgingAll ? 'Purging...' : 'Purge All Evidence'}
-          </Button>
-
           <Button variant="secondary" size="sm" icon={<RefreshCw className="w-3 h-3" />} onClick={fetchEvidence}>
             Refresh Repository
           </Button>
@@ -390,11 +358,10 @@ export const EvidenceLocker: React.FC = () => {
           </div>
 
           {pkgVerifyResult && (
-            <div className={`p-3 rounded text-xs space-y-1.5 font-mono ${
-              pkgVerifyResult.is_valid
+            <div className={`p-3 rounded text-xs space-y-1.5 font-mono ${pkgVerifyResult.is_valid
                 ? 'bg-zinc-900 border border-zinc-700 text-zinc-200'
                 : 'bg-zinc-900 border border-zinc-700 text-white'
-            }`}>
+              }`}>
               <div className="flex items-center justify-between font-bold">
                 <span className="flex items-center gap-1.5">
                   {pkgVerifyResult.is_valid ? (

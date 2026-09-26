@@ -386,28 +386,3 @@ async def export_timeline_clip(
         "reason": payload.reason
     }
 
-@router.post("/purge-all")
-@router.delete("/purge-all")
-async def purge_all_recordings(
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Purges all recording segments from both database and disk storage.
-    """
-    import shutil
-    from sqlalchemy import delete
-    await db.execute(delete(RecordingSegment))
-    await db.commit()
-
-    deleted_count = 0
-    if settings.RECORDINGS_DIR.exists():
-        for root, dirs, files in os.walk(settings.RECORDINGS_DIR):
-            deleted_count += len(files)
-        shutil.rmtree(settings.RECORDINGS_DIR)
-        settings.RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-
-    return {
-        "status": "SUCCESS",
-        "message": "All recording segments purged",
-        "deleted_files": deleted_count
-    }

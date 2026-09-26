@@ -62,11 +62,11 @@ class CameraSegmentBuffer:
             if self.segment_start_time is None:
                 self.segment_start_time = now
 
-            # Downscale frame for segment buffer (854px max) to prevent memory exhaustion
+            # Downscale frame for segment buffer (1920px max) to prevent memory exhaustion on 4K streams
             h, w = frame.shape[:2]
-            if w > 854:
-                scale_w = 854
-                scale_h = int(854 * h / w)
+            if w > 1920:
+                scale_w = 1920
+                scale_h = int(1920 * h / w)
                 rec_frame = cv2.resize(frame, (scale_w, scale_h))
             else:
                 rec_frame = frame.copy()

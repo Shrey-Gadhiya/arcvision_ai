@@ -63,16 +63,6 @@ export const nvrApi = {
     return res.data;
   },
 
-  async purgeAllRecordings() {
-    const res = await apiClient.post('/recordings/purge-all');
-    return res.data;
-  },
-
-  async purgeAllEvidence() {
-    const res = await apiClient.post('/evidence/purge-all');
-    return res.data;
-  },
-
   async exportEvidencePackage(incidentId: number) {
     const res = await apiClient.post(`/evidence/export-package/${incidentId}`);
     return res.data;

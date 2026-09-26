@@ -181,6 +181,19 @@ class FaceRecognitionService:
         Compares query embedding against enrolled gallery.
         Distinguishes KNOWN, UNKNOWN, and UNCERTAIN.
         """
+        if getattr(self, "embedding_adapter", None) is not None:
+            adapter_status = getattr(self.embedding_adapter, "status", None)
+            if adapter_status in (AdapterStatus.NOT_CONFIGURED, AdapterStatus.ERROR) or isinstance(self.embedding_adapter, UnavailableFaceEmbeddingAdapter):
+                return FaceMatchResult(
+                    status=FaceMatchStatus.UNAVAILABLE.value,
+                    identity_id=None,
+                    identity_name=None,
+                    similarity_score=0.0,
+                    threshold=self.recognition_threshold,
+                    is_matched=False,
+                    diagnostics="Face embedding adapter is unavailable or not configured"
+                )
+
         if not query_embedding or len(query_embedding) == 0:
             return FaceMatchResult(
                 status=FaceMatchStatus.UNKNOWN.value,

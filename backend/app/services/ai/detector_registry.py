@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Dict, Optional, List, Any
 from app.services.ai.base import BaseDetectorAdapter, DetectorStatus
 from app.services.ai.yolo_adapter import YOLODetectorAdapter
@@ -21,17 +22,69 @@ class DetectorRegistry:
         self._initialize_defaults()
 
     def _initialize_defaults(self):
-        # 1. Primary Deployed Detector: Verified YOLOv8n
-        yolo_v8n = YOLODetectorAdapter(
-            name="YOLOv8n Perimeter Detector",
-            model_path="yolov8n.pt",
-            model_version="v8.4.155",
-            device="cpu",
-            precision="fp16"
-        )
-        self.register("yolov8n", yolo_v8n)
+        models_dir = Path(__file__).resolve().parent.parent.parent / "data" / "models"
+        
+        # 1. Primary Deployed Detector: YOLOv8m (or fallback to YOLOv8n)
+        yolov8m_path = models_dir / "detection" / "yolov8m" / "yolov8m.pt"
+        yolov8s_path = models_dir / "detection" / "yolov8s" / "yolov8s.pt"
+        yolov8l_path = models_dir / "detection" / "yolov8l" / "yolov8l.pt"
+        yolov8n_path = Path("yolov8n.pt")
+        
+        if yolov8m_path.exists():
+            yolo_primary = YOLODetectorAdapter(
+                name="YOLOv8m Primary Perimeter Detector",
+                model_path=str(yolov8m_path),
+                model_version="v8.4.155",
+                device="cpu",
+                precision="fp16"
+            )
+            self.register("yolov8m", yolo_primary)
+            self._default_key = "yolov8m"
+        else:
+            yolo_v8n = YOLODetectorAdapter(
+                name="YOLOv8n Perimeter Detector",
+                model_path="yolov8n.pt",
+                model_version="v8.4.155",
+                device="cpu",
+                precision="fp16"
+            )
+            self.register("yolov8n", yolo_v8n)
+            self._default_key = "yolov8n"
 
-        # 2. ONNX Runtime Engine
+        # 2. Fast Path Detector
+        if yolov8s_path.exists():
+            yolo_fast = YOLODetectorAdapter(
+                name="YOLOv8s Fast Perimeter Detector",
+                model_path=str(yolov8s_path),
+                model_version="v8.4.155",
+                device="cpu",
+                precision="fp16"
+            )
+            self.register("yolov8s", yolo_fast)
+
+        # 3. Deep Forensic Detector
+        if yolov8l_path.exists():
+            yolo_deep = YOLODetectorAdapter(
+                name="YOLOv8l Deep Forensic Detector",
+                model_path=str(yolov8l_path),
+                model_version="v8.4.155",
+                device="cpu",
+                precision="fp16"
+            )
+            self.register("yolov8l", yolo_deep)
+
+        # 4. Fallback Detector (always kept for resilience)
+        if "yolov8n" not in self._detectors:
+            yolo_fallback = YOLODetectorAdapter(
+                name="YOLOv8n Fallback Detector",
+                model_path="yolov8n.pt",
+                model_version="v8.4.155",
+                device="cpu",
+                precision="fp16"
+            )
+            self.register("yolov8n", yolo_fallback)
+
+        # 5. ONNX Runtime Engine
         onnx_det = ONNXDetectorAdapter(name="ONNX Runtime Detector", model_path="yolov8n.onnx", device="cpu")
         self.register("onnx_yolo", onnx_det)
 

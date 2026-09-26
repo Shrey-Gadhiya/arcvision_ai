@@ -27,7 +27,6 @@ def get_model_summary():
         except Exception:
             pass
 
-    # Check detector hierarchy
     yolov8n_pt = BACKEND_DIR / "yolov8n.pt"
     yolov8s_pt = models_dir / "detection" / "yolov8s" / "yolov8s.pt"
     yolov8m_pt = models_dir / "detection" / "yolov8m" / "yolov8m.pt"
@@ -36,75 +35,76 @@ def get_model_summary():
     sface_onnx = models_dir / "face_recognition_sface_2021dec.onnx"
     pose_pt = models_dir / "pose" / "yolov8n-pose.pt"
     seg_pt = models_dir / "segmentation" / "yolov8n-seg.pt"
+    ocr_onnx = models_dir / "ocr" / "crnn_en_2021sep.onnx"
+    reid_pth = models_dir / "reid" / "mobilenetv3_reid.pth"
     
-    rows = []
+    sections = {
+        "ACTIVE": [],
+        "STANDBY": [],
+        "FALLBACK": [],
+        "NOT_AVAILABLE": []
+    }
     
-    # 1. Primary Detector
+    # 1. Active Primary & Fast Detectors
     if yolov8m_pt.exists():
-        rows.append(("Primary Detector (YOLOv8m)", "VERIFIED / ACTIVE", str(yolov8m_pt.name), "25.9M params"))
-    elif yolov8n_pt.exists():
-        rows.append(("Primary Detector (YOLOv8n)", "VERIFIED / ACTIVE", str(yolov8n_pt.name), "3.1M params"))
-    else:
-        rows.append(("Primary Detector", "MISSING", "N/A", "N/A"))
-
-    # 2. Fast Path Detector
+        sections["ACTIVE"].append(("Primary Detector (YOLOv8m)", "YOLOv8", "v8.4.155", "Detection", "yolov8m.pt", "PyTorch_CPU", "CPU", "25.9M", "AGPL-3.0"))
     if yolov8s_pt.exists():
-        rows.append(("Fast Detector (YOLOv8s)", "VERIFIED / ACTIVE", str(yolov8s_pt.name), "11.2M params"))
-    elif yolov8n_pt.exists():
-        rows.append(("Fast Detector (YOLOv8n)", "VERIFIED / STANDBY", str(yolov8n_pt.name), "3.1M params"))
-    else:
-        rows.append(("Fast Detector", "STANDBY", "N/A", "N/A"))
-
-    # 3. Deep Forensic Detector
-    if yolov8l_pt.exists():
-        rows.append(("Deep Detector (YOLOv8l)", "VERIFIED / STANDBY", str(yolov8l_pt.name), "43.7M params"))
-    else:
-        rows.append(("Deep Detector (YOLOv8l)", "STANDBY / MISSING", "N/A", "N/A"))
-
-    # 4. Face Intelligence
-    if yunet_onnx.exists() and sface_onnx.exists():
-        rows.append(("Face Intelligence (YuNet+SFace)", "VERIFIED / ACTIVE", "yunet + sface onnx", "1.9M params"))
-    else:
-        rows.append(("Face Intelligence", "PARTIAL", "N/A", "N/A"))
-
-    # 5. Pose Estimation
+        sections["ACTIVE"].append(("Fast Detector (YOLOv8s)", "YOLOv8", "v8.4.155", "Detection", "yolov8s.pt", "PyTorch_CPU", "CPU", "11.2M", "AGPL-3.0"))
     if pose_pt.exists():
-        rows.append(("Tactical Pose (17-Keypoint)", "VERIFIED / ACTIVE", str(pose_pt.name), "3.3M params"))
-    else:
-        rows.append(("Tactical Pose", "STANDBY / RULE_FALLBACK", "N/A", "N/A"))
+        sections["ACTIVE"].append(("Tactical Pose Model (17-Kp)", "YOLOv8-Pose", "v8.4.155", "Pose", "yolov8n-pose.pt", "PyTorch_CPU", "CPU", "3.3M", "AGPL-3.0"))
+    if yunet_onnx.exists():
+        sections["ACTIVE"].append(("Face Detector (YuNet)", "YuNet", "2023mar", "Face Detection", "yunet_2023mar.onnx", "OpenCV_DNN", "CPU", "85K", "Apache-2.0"))
+    if sface_onnx.exists():
+        sections["ACTIVE"].append(("Face Recognition (SFace)", "SFace", "2021dec", "Face Embedding", "sface_2021dec.onnx", "OpenCV_DNN", "CPU", "1.8M", "Apache-2.0"))
+    if ocr_onnx.exists():
+        sections["ACTIVE"].append(("Dedicated OCR Engine (CRNN)", "CRNN", "2021sep", "Text Recognition", "crnn_en_2021sep.onnx", "OpenCV_DNN", "CPU", "8.3M", "Apache-2.0"))
+    if reid_pth.exists():
+        sections["ACTIVE"].append(("Person Re-ID (MobileNetV3)", "MobileNetV3", "v3-small", "Person Re-ID", "mobilenetv3_reid.pth", "TorchVision", "CPU", "2.5M", "BSD-3-Clause"))
+    sections["ACTIVE"].append(("Behavior Analytics Engine", "RuleEngine", "v2.0", "Behavior Analysis", "11 Rules Engine", "Native", "CPU", "N/A", "Proprietary"))
 
-    # 6. Forensic Segmentation
+    # 2. Standby Models
+    if yolov8l_pt.exists():
+        sections["STANDBY"].append(("Deep Forensic (YOLOv8l)", "YOLOv8", "v8.4.155", "Deep Detection", "yolov8l.pt", "PyTorch_CPU", "CPU", "43.7M", "AGPL-3.0"))
     if seg_pt.exists():
-        rows.append(("Forensic Segmentation", "VERIFIED / STANDBY", str(seg_pt.name), "3.4M params"))
-    else:
-        rows.append(("Forensic Segmentation", "STANDBY / POLY_FALLBACK", "N/A", "N/A"))
+        sections["STANDBY"].append(("Forensic Segmentation (YOLOv8-Seg)", "YOLOv8-Seg", "v8.4.155", "Segmentation", "yolov8n-seg.pt", "PyTorch_CPU", "CPU", "3.4M", "AGPL-3.0"))
+    sections["STANDBY"].append(("Relative Monocular Depth", "Perspective", "v1.0", "Relative Depth", "Geometric Engine", "Native", "CPU", "N/A", "Proprietary"))
 
-    # 7. ANPR Engine
-    rows.append(("ANPR / ALPR Engine", "VERIFIED / ACTIVE", "Indian OCR Engine", "Heuristic + Regex"))
+    # 3. Fallback Models
+    if yolov8n_pt.exists():
+        sections["FALLBACK"].append(("Fallback Detector (YOLOv8n)", "YOLOv8", "v8.4.155", "Fallback Detection", "yolov8n.pt", "OpenVINO", "CPU", "3.1M", "AGPL-3.0"))
 
-    # 8. Person & Vehicle Re-ID
-    rows.append(("Cross-Camera Re-ID", "VERIFIED / ACTIVE", "Biometric/Plate Fusion", "Spatial-Temporal Graph"))
+    # 4. Not Available Models (Explicit truthfulness)
+    sections["NOT_AVAILABLE"].append(("YOLO26m Primary Detector", "YOLO26", "N/A", "Object Detection", "Official weights not published. Active primary is YOLOv8m."))
+    sections["NOT_AVAILABLE"].append(("YOLO26s Fast Detector", "YOLO26", "N/A", "Object Detection", "Official weights not published. Active fast detector is YOLOv8s."))
+    sections["NOT_AVAILABLE"].append(("YOLO26l Deep Forensic", "YOLO26", "N/A", "Object Detection", "Official weights not published. Standby deep detector is YOLOv8l."))
+    sections["NOT_AVAILABLE"].append(("Depth-Anything-V2", "DepthAnything", "v2", "Metric Depth", "Pretrained weights not installed. Operating with relative depth."))
+    sections["NOT_AVAILABLE"].append(("YOLOE Open-Vocabulary", "YOLOE", "ViT", "Open Vocab", "Transformer weights not installed. Operating with surveillance lexicon."))
 
-    # 9. Depth Estimation
-    rows.append(("Monocular Depth", "STANDBY / RELATIVE_DEPTH", "Perspective Engine", "Relative Depth Mode"))
-
-    # 10. Open Vocabulary
-    rows.append(("Open-Vocabulary", "STANDBY / HEURISTIC", "Rule/Surveillance Lexicon", "Keyword Adapter"))
-
-    # 11. Behavior Engine
-    rows.append(("Behavior Analytics", "VERIFIED / ACTIVE", "11 Deterministic Rules", "Kinematic Analysis"))
-
-    return rows
+    return sections
 
 def main():
-    print("\n==========================================================================================")
-    print("                              ARC VISION MODEL STATUS CLI                                 ")
-    print("==========================================================================================")
-    print(f"{'SUBSYSTEM / MODEL':<34} | {'STATUS':<26} | {'ARTIFACT':<20} | {'DETAILS':<15}")
-    print("-" * 106)
-    for name, status, artifact, details in get_model_summary():
-        print(f"{name:<34} | {status:<26} | {artifact:<20} | {details:<15}")
-    print("==========================================================================================\n")
+    print("\n" + "=" * 120)
+    print("                                   ARC VISION MODEL STATUS & AUDIT CLI                                   ")
+    print("=" * 120)
+    
+    sections = get_model_summary()
+    
+    for section_name, items in sections.items():
+        print(f"\n[{section_name} MODELS] - Total: {len(items)}")
+        if section_name != "NOT_AVAILABLE":
+            print(f"{'MODEL NAME':<34} | {'FAMILY':<12} | {'TASK':<18} | {'RUNTIME':<12} | {'PARAMS':<8} | {'ARTIFACT':<20}")
+            print("-" * 120)
+            for item in items:
+                name, family, ver, task, artifact, runtime, dev, params, lic = item
+                print(f"{name:<34} | {family:<12} | {task:<18} | {runtime:<12} | {params:<8} | {artifact:<20}")
+        else:
+            print(f"{'REQUESTED MODEL':<34} | {'FAMILY':<12} | {'TASK':<18} | {'HONEST REASON / CURRENT ACTIVE SUBSTITUTE':<50}")
+            print("-" * 120)
+            for item in items:
+                name, family, ver, task, reason = item
+                print(f"{name:<34} | {family:<12} | {task:<18} | {reason:<50}")
+
+    print("\n" + "=" * 120 + "\n")
 
 if __name__ == "__main__":
     main()

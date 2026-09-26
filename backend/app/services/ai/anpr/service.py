@@ -33,6 +33,7 @@ from app.services.ai.anpr.base import (
 from app.services.ai.anpr.adapters import (
     HeuristicPlateDetectorAdapter,
     EasyOCRPlateAdapter,
+    CRNNPlateOCRAdapter,
     UnavailablePlateDetectorAdapter,
     UnavailableOCRAdapter
 )
@@ -53,12 +54,17 @@ class PlateRecognitionService:
     def __init__(self):
         # Initialize default adapters
         self.detector_adapter: BasePlateDetectorAdapter = HeuristicPlateDetectorAdapter()
-        self.ocr_adapter: BasePlateOCRAdapter = EasyOCRPlateAdapter()
         
-        # Try loading OCR adapter
-        self.ocr_adapter.load()
-        if self.ocr_adapter.status != AdapterStatus.LOADED:
-            logger.info("EasyOCR not active. Operating with heuristic plate localization & explicit unavailable OCR reporting.")
+        # Primary: Real CRNN Neural OCR
+        crnn = CRNNPlateOCRAdapter()
+        if crnn.status == AdapterStatus.LOADED:
+            self.ocr_adapter: BasePlateOCRAdapter = crnn
+            logger.info("Activated CRNN Neural OCR as primary ANPR reader.")
+        else:
+            self.ocr_adapter: BasePlateOCRAdapter = EasyOCRPlateAdapter()
+            self.ocr_adapter.load()
+            if self.ocr_adapter.status != AdapterStatus.LOADED:
+                logger.info("Operating with heuristic plate localization & explicit unavailable OCR reporting.")
 
         # Camera configurations: camera_id -> config dict
         self.camera_configs: Dict[int, Dict[str, Any]] = {}

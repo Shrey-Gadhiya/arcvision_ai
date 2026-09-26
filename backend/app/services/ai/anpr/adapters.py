@@ -1,8 +1,9 @@
+import os
 import time
 import logging
 import cv2
 import numpy as np
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from app.services.ai.anpr.base import (
     BasePlateDetectorAdapter,
@@ -331,6 +332,115 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
             round(max(0.0, min(1.0, float(ymax) / max(1, h))), 4)
         ]
         return best_candidate
+
+class CRNNPlateOCRAdapter(BasePlateOCRAdapter):
+    """
+    Real Neural CRNN Plate OCR Adapter using OpenCV DNN and CTC Decoding.
+    Artifact: data/models/ocr/crnn_en_2021sep.onnx (33.8 MB, 37 CTC classes).
+    """
+    VOCABULARY = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+    def __init__(
+        self,
+        name: str = "crnn_plate_ocr",
+        model_path: str = "data/models/ocr/crnn_en_2021sep.onnx",
+        device: str = "cpu"
+    ):
+        super().__init__(name=name, device=device)
+        self.model_path = model_path
+        self.net = None
+        self.load()
+
+    def load(self) -> bool:
+        if not os.path.exists(self.model_path):
+            self.status = AdapterStatus.UNAVAILABLE
+            self.last_error = f"CRNN model weights not found at {self.model_path}"
+            return False
+        try:
+            self.net = cv2.dnn.readNetFromONNX(self.model_path)
+            self.status = AdapterStatus.LOADED
+            self.last_error = None
+            logger.info(f"CRNN Plate OCR Adapter loaded successfully from {self.model_path} on {self.device}")
+            return True
+        except Exception as e:
+            self.status = AdapterStatus.ERROR
+            self.last_error = str(e)
+            logger.error(f"Failed to load CRNN ONNX model: {e}")
+            return False
+
+    def unload(self) -> bool:
+        self.net = None
+        self.status = AdapterStatus.UNLOADED
+        return True
+
+    def _ctc_decode(self, preds: np.ndarray) -> Tuple[str, float]:
+        """Greedy CTC decoding over sequence length (T, 1, C)."""
+        # preds shape: (T, 1, 37)
+        if len(preds.shape) == 3:
+            preds = preds[:, 0, :]
+        
+        # Softmax over classes
+        exp_preds = np.exp(preds - np.max(preds, axis=-1, keepdims=True))
+        probs = exp_preds / np.sum(exp_preds, axis=-1, keepdims=True)
+        
+        best_indices = np.argmax(probs, axis=-1)
+        confidences = np.max(probs, axis=-1)
+        
+        char_list = []
+        conf_list = []
+        prev_idx = -1
+        
+        blank_idx = len(self.VOCABULARY)  # index 36 is blank
+        
+        for idx, conf in zip(best_indices, confidences):
+            if idx != prev_idx and idx < blank_idx:
+                char_list.append(self.VOCABULARY[idx].upper())
+                conf_list.append(float(conf))
+            prev_idx = idx
+            
+        decoded_text = "".join(char_list)
+        avg_conf = float(np.mean(conf_list)) if conf_list else 0.0
+        return decoded_text, avg_conf
+
+    def read_plate(self, plate_crop: np.ndarray) -> OCRResult:
+        if self.status != AdapterStatus.LOADED or self.net is None:
+            return OCRResult(
+                raw_text="",
+                confidence=0.0,
+                status=self.status.value,
+                metadata={"error": self.last_error or "CRNN net not loaded"}
+            )
+        if plate_crop is None or plate_crop.size == 0:
+            return OCRResult(raw_text="", confidence=0.0, status="EMPTY_IMAGE")
+
+        t0 = time.time()
+        try:
+            h, w = plate_crop.shape[:2]
+            target_w = max(100, int(w * (32.0 / max(1, h))))
+            # Construct blob
+            blob = cv2.dnn.blobFromImage(
+                plate_crop,
+                scalefactor=1.0 / 127.5,
+                size=(target_w, 32),
+                mean=(127.5, 127.5, 127.5),
+                swapRB=True,
+                crop=False
+            )
+            self.net.setInput(blob)
+            preds = self.net.forward()
+            text, conf = self._ctc_decode(preds)
+            cleaned = clean_raw_plate(text)
+            self.latency_ms = (time.time() - t0) * 1000.0
+            
+            return OCRResult(
+                raw_text=cleaned,
+                confidence=round(conf, 3),
+                status="SUCCESS" if cleaned else "NO_TEXT",
+                metadata={"raw": text, "latency_ms": round(self.latency_ms, 2)}
+            )
+        except Exception as e:
+            self.latency_ms = (time.time() - t0) * 1000.0
+            return OCRResult(raw_text="", confidence=0.0, status="ERROR", metadata={"error": str(e)})
 
 class UnavailablePlateDetectorAdapter(BasePlateDetectorAdapter):
     """Explicit adapter indicating plate detection model is not configured."""

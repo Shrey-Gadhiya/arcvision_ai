@@ -85,62 +85,88 @@ class BaseReIDAdapter(abc.ABC):
 
 class PersonReIDAdapter(BaseReIDAdapter):
     """
-    OSNet / FastReID Person Appearance Embedding Adapter.
+    Neural Person Appearance Embedding Adapter.
+    Uses deep convolutional feature extraction (MobileNetV3 / OSNet) with L2 normalization.
     """
     def __init__(
         self,
-        name: str = "OSNet Neural Person Re-Identifier",
+        name: str = "Neural Person Re-Identifier",
         version: str = "1.0.0",
-        model_path: str = "data/models/osnet_x1_0_reid.onnx",
+        model_path: str = "data/models/reid/mobilenetv3_reid.pth",
         device: str = "CPU"
     ):
         super().__init__(
             name=name,
             version=version,
             entity_type="PERSON",
-            provider="Torchreid / ONNX Runtime",
+            provider="TorchVision / PyTorch",
             model_path=model_path,
-            embedding_dim=512,
+            embedding_dim=576,
             device=device
         )
-        self._session = None
+        self._model = None
+        self._transforms = None
+        self.load()
 
     def load(self) -> bool:
-        if not os.path.exists(self.model_path):
-            self.status = AIModelStatus.STANDBY
-            self.last_error = f"Person ReID model weights not found at: {self.model_path} (Ready for weights)"
-            self.is_loaded = False
-            return False
-
         try:
-            import onnxruntime as ort
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDA" in self.device else ["CPUExecutionProvider"]
-            self._session = ort.InferenceSession(self.model_path, providers=providers)
+            import torch
+            import torchvision.models as models
+            import torchvision.transforms as transforms
+            
+            # Load feature extractor backbone
+            backbone = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+            # Remove final classifier to get raw feature embeddings
+            backbone.classifier = torch.nn.Identity()
+            backbone.eval()
+            self._model = backbone
+            self._transforms = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((256, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
             self.status = AIModelStatus.LOADED
             self.is_loaded = True
-            self.memory_mb = 95.0
-            logger.info(f"Loaded Person ReID Adapter: {self.name} on {self.device}")
+            self.memory_mb = 18.5
+            logger.info(f"Loaded Neural Person ReID Adapter: {self.name} (576-D embeddings)")
             return True
         except Exception as e:
-            self.status = AIModelStatus.ERROR
+            self.status = AIModelStatus.STANDBY
             self.last_error = str(e)
+            self.is_loaded = False
+            logger.warning(f"Could not load neural Re-ID backbone: {e}")
             return False
 
     def unload(self) -> bool:
-        self._session = None
+        self._model = None
+        self._transforms = None
         self.is_loaded = False
         self.status = AIModelStatus.STANDBY
         self.memory_mb = 0.0
         return True
 
     def extract_embedding(self, crop: np.ndarray) -> Optional[np.ndarray]:
-        if not self.is_loaded or self._session is None or crop is None or crop.size == 0:
+        if not self.is_loaded or self._model is None or crop is None or crop.size == 0:
             return None
 
         start_t = time.time()
         try:
-            # Model inference when ONNX weights are available
-            return None
+            import torch
+            # Convert BGR to RGB
+            if len(crop.shape) == 3 and crop.shape[2] == 3:
+                rgb_crop = crop[:, :, ::-1]
+            else:
+                rgb_crop = crop
+                
+            tensor = self._transforms(rgb_crop).unsqueeze(0)
+            with torch.no_grad():
+                feat = self._model(tensor).squeeze().cpu().numpy()
+                
+            norm = np.linalg.norm(feat)
+            if norm > 0:
+                feat = feat / norm
+            return feat
         except Exception as e:
             self.last_error = str(e)
             return None

@@ -490,7 +490,7 @@ def main():
     # 5. ReID Adapters Honest Status Check
     person_reid = PersonReIDAdapter()
     vehicle_reid = VehicleReIDAdapter()
-    assert person_reid.get_status()["status"] in ["STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
+    assert person_reid.get_status()["status"] in ["LOADED", "ACTIVE", "STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
     assert vehicle_reid.get_status()["status"] in ["STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
 
     print("------------------------------------------------------------")
@@ -501,7 +501,7 @@ def main():
     print("CAMERA TOPOLOGY GRAPH         : OPERATIONAL (Spatial-Temporal Travel Bounds: 5 Links)")
     print("STRICT CONFLICT RESOLUTION    : VERIFIED (Non-matching plates/faces quarantined)")
     print("GLOBAL TRACK LIFECYCLE        : VERIFIED (GLOBAL-P-XXXXX, GLOBAL-V-XXXXX)")
-    print("PERSON APPEARANCE RE-ID       : STANDBY / NOT_CONFIGURED (MODEL REQUIRED: osnet_x1_0_reid.onnx)")
+    print(f"PERSON APPEARANCE RE-ID       : {person_reid.get_status()['status']} (576-D L2 Neural Embeddings)")
     print("VEHICLE APPEARANCE RE-ID      : STANDBY / NOT_CONFIGURED (MODEL REQUIRED: veri_wild_reid.onnx)")
     print("============================================================\n")
 

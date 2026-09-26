@@ -20,13 +20,14 @@ def test_reid_adapter_contracts():
     person_reid = PersonReIDAdapter()
     vehicle_reid = VehicleReIDAdapter()
 
-    assert person_reid.load() is False
+    # Person ReID loads real deep feature extractor, while Vehicle ReID honestly remains standby
+    assert person_reid.is_loaded is True
     assert vehicle_reid.load() is False
 
     p_status = person_reid.get_status()
     v_status = vehicle_reid.get_status()
 
-    assert p_status["status"] in ["STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
+    assert p_status["status"] in ["LOADED", "ACTIVE", "STANDBY", "NOT_CONFIGURED"]
     assert v_status["status"] in ["STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
     assert p_status["task"] == "PERSON_REID"
     assert v_status["task"] == "VEHICLE_REID"
@@ -197,7 +198,7 @@ def test_cross_camera_api_endpoints():
             assert "plate_correlation" in data["subsystems"]
             assert "face_correlation" in data["subsystems"]
             assert "appearance_person_reid" in data["subsystems"]
-            assert data["subsystems"]["appearance_person_reid"]["status"] in ["STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
+            assert data["subsystems"]["appearance_person_reid"]["status"] in ["LOADED", "ACTIVE", "STANDBY", "NOT_CONFIGURED", "STANDBY / NOT_CONFIGURED"]
 
             # 2. Topology list
             topo_res = await client.get("/api/v1/cross-camera/topology")

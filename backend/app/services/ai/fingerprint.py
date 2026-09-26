@@ -8,6 +8,7 @@ from enum import Enum
 logger = logging.getLogger("arc_vision.ai.fingerprint")
 
 class RegistryStatus(str, Enum):
+    NOT_FOUND = "NOT_FOUND"
     DISCOVERED = "DISCOVERED"
     DOWNLOADED = "DOWNLOADED"
     HASH_VERIFIED = "HASH_VERIFIED"
@@ -16,9 +17,13 @@ class RegistryStatus(str, Enum):
     BENCHMARKED = "BENCHMARKED"
     DEPLOYED = "DEPLOYED"
     ACTIVE = "ACTIVE"
-    INVALID_CONFIGURATION = "INVALID_CONFIGURATION"
     STANDBY = "STANDBY"
+    FALLBACK = "FALLBACK"
     NOT_DEPLOYED = "NOT_DEPLOYED"
+    INVALID_CONFIGURATION = "INVALID_CONFIGURATION"
+    LICENSE_REVIEW_REQUIRED = "LICENSE_REVIEW_REQUIRED"
+    FAILED = "FAILED"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
 
 class ModelFingerprint:
     def __init__(

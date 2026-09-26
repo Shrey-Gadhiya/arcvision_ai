@@ -44,6 +44,23 @@ if ! command -v cloudflared &> /dev/null; then
     fi
 fi
 
+# 3. Check GPU and ensure CUDA-enabled PyTorch is present
+if command -v nvidia-smi &> /dev/null; then
+    echo "[ARC VISION] NVIDIA GPU hardware detected via nvidia-smi."
+    if ! python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" &> /dev/null; then
+        echo "[ARC VISION] Installing CUDA-enabled PyTorch build (cu121) for full GPU offloading..."
+        pip install --quiet --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    else
+        echo "[ARC VISION] PyTorch CUDA acceleration is active."
+    fi
+else
+    echo "──────────────────────────────────────────────────────────────────────"
+    echo "⚠️  NOTE: No NVIDIA GPU detected in this Colab session!"
+    echo "   To offload 100% of AI compute to GPU and achieve 50x higher FPS:"
+    echo "   Go to Colab Menu: Runtime ➔ Change runtime type ➔ Select T4 GPU"
+    echo "──────────────────────────────────────────────────────────────────────"
+fi
+
 # 3. Launch Master Python Orchestrator
 echo "[ARC VISION] Launching ARC VISION Master Deployment Controller..."
 python3 scripts/colab_launch.py

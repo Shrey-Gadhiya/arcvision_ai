@@ -101,6 +101,8 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
             self.fingerprint = fingerprint_model_artifact(model_to_load)
             self.weights_hash = self.fingerprint.weights_sha256
             self.model = YOLO(model_to_load)
+            if str(self.device).startswith("cuda"):
+                self.model.to(self.device)
             self.status = DetectorStatus.LOADED
             self.last_error = None
             logger.info(f"Loaded {self.fingerprint.actual_variant} ({self.fingerprint.actual_family}, {self.fingerprint.parameter_count} params) from {model_to_load} on {self.device} [{self.runtime}]")
@@ -130,6 +132,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         detections: List[Detection] = []
 
         try:
+            use_half = (self.precision == "fp16" and str(self.device).startswith("cuda"))
             results = self.model(
                 frame,
                 conf=confidence_threshold,
@@ -138,6 +141,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                 agnostic_nms=True,
                 iou=0.45,
                 device=self.device,
+                half=use_half,
                 verbose=False
             )
 

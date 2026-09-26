@@ -22,6 +22,13 @@ class DetectorRegistry:
         self._initialize_defaults()
 
     def _initialize_defaults(self):
+        import os
+        import torch
+        
+        target_device = os.getenv("ARCVISION_DEVICE")
+        if not target_device:
+            target_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            
         models_dir = Path(__file__).resolve().parent.parent.parent / "data" / "models"
         yolo26_dir = models_dir / "detection" / "yolo26"
         
@@ -34,7 +41,7 @@ class DetectorRegistry:
                 name="YOLO26m Primary Perimeter Detector",
                 model_path=str(yolo26m_path),
                 model_version="26.0.0",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolo26m", yolo_primary)
@@ -44,7 +51,7 @@ class DetectorRegistry:
                 name="YOLOv8m Primary Perimeter Detector",
                 model_path=str(yolov8m_path),
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8m", yolo_primary)
@@ -54,7 +61,7 @@ class DetectorRegistry:
                 name="YOLOv8n Perimeter Detector",
                 model_path="yolov8n.pt",
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8n", yolo_v8n)
@@ -68,7 +75,7 @@ class DetectorRegistry:
                 name="YOLO26s Fast Perimeter Detector",
                 model_path=str(yolo26s_path),
                 model_version="26.0.0",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolo26s", yolo_fast)
@@ -77,7 +84,7 @@ class DetectorRegistry:
                 name="YOLOv8s Fast Perimeter Detector",
                 model_path=str(yolov8s_path),
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8s", yolo_fast)
@@ -90,7 +97,7 @@ class DetectorRegistry:
                 name="YOLO26l Deep Forensic Detector",
                 model_path=str(yolo26l_path),
                 model_version="26.0.0",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolo26l", yolo_deep)
@@ -99,7 +106,7 @@ class DetectorRegistry:
                 name="YOLO26x Extreme Forensic Detector",
                 model_path=str(yolo26x_path),
                 model_version="26.0.0",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolo26x", yolo_extreme)
@@ -110,7 +117,7 @@ class DetectorRegistry:
                 name="YOLOv8m Fallback Detector",
                 model_path=str(yolov8m_path),
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8m", yolo_v8m_fallback)
@@ -120,7 +127,7 @@ class DetectorRegistry:
                 name="YOLOv8s Fallback Detector",
                 model_path=str(yolov8s_path),
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8s", yolo_v8s_fallback)
@@ -130,13 +137,13 @@ class DetectorRegistry:
                 name="YOLOv8n Perimeter Fallback",
                 model_path="yolov8n.pt",
                 model_version="v8.4.155",
-                device="cpu",
+                device=target_device,
                 precision="fp16"
             )
             self.register("yolov8n", yolo_v8n_fallback)
 
         # 5. ONNX Runtime Engine
-        onnx_det = ONNXDetectorAdapter(name="ONNX Runtime Detector", model_path="yolov8n.onnx", device="cpu")
+        onnx_det = ONNXDetectorAdapter(name="ONNX Runtime Detector", model_path="yolov8n.onnx", device=target_device)
         self.register("onnx_yolo", onnx_det)
 
     def register(self, key: str, adapter: BaseDetectorAdapter):

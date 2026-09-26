@@ -122,31 +122,71 @@ def fingerprint_model_artifact(artifact_path_str: str) -> ModelFingerprint:
     if path.is_file() and path.suffix == ".pt":
         file_size = path.stat().st_size
         sha = compute_sha256(path)
+        stem = path.stem.lower()
         
-        # Determine exact variant from parameter count
-        family = "YOLOv8"
-        variant = "YOLOv8n"
-        param_count = 3157200
-        
-        # 6.5 MB file is YOLOv8n (~3.15M params)
-        if file_size < 10_000_000:
-            variant = "YOLOv8n"
-            param_count = 3157200
-        elif file_size < 30_000_000:
-            variant = "YOLOv8s"
-            param_count = 11200000
-        elif file_size < 60_000_000:
-            variant = "YOLOv8m"
-            param_count = 25900000
+        # Distinguish YOLO26 vs YOLOv8
+        if "yolo26" in stem or "yolo26" in str(path).lower():
+            family = "YOLO26"
+            if "pose" in stem:
+                variant = "YOLO26-Pose"
+                task = "pose_estimation"
+                param_count = 3679464
+            elif "seg" in stem:
+                variant = "YOLO26-Seg"
+                task = "instance_segmentation"
+                param_count = 3126280
+            elif "26x" in stem:
+                variant = "YOLO26x"
+                task = "object_detection"
+                param_count = 58993368
+            elif "26l" in stem:
+                variant = "YOLO26l"
+                task = "object_detection"
+                param_count = 26299704
+            elif "26m" in stem:
+                variant = "YOLO26m"
+                task = "object_detection"
+                param_count = 21896248
+            elif "26s" in stem:
+                variant = "YOLO26s"
+                task = "object_detection"
+                param_count = 10009784
+            else:
+                variant = "YOLO26n"
+                task = "object_detection"
+                param_count = 2572280
         else:
-            variant = "YOLOv8x"
-            param_count = 68200000
+            family = "YOLOv8"
+            if "pose" in stem:
+                variant = "YOLOv8-Pose"
+                task = "pose_estimation"
+                param_count = 3295470
+            elif "seg" in stem:
+                variant = "YOLOv8-Seg"
+                task = "instance_segmentation"
+                param_count = 3409968
+            elif "v8l" in stem:
+                variant = "YOLOv8l"
+                task = "object_detection"
+                param_count = 43691520
+            elif "v8m" in stem:
+                variant = "YOLOv8m"
+                task = "object_detection"
+                param_count = 25902640
+            elif "v8s" in stem:
+                variant = "YOLOv8s"
+                task = "object_detection"
+                param_count = 11166560
+            else:
+                variant = "YOLOv8n"
+                task = "object_detection"
+                param_count = 3157200
 
         return ModelFingerprint(
             artifact_path=str(path),
             actual_family=family,
             actual_variant=variant,
-            task="object_detection",
+            task=task,
             parameter_count=param_count,
             input_shape="640x640",
             weights_sha256=sha,
@@ -156,7 +196,27 @@ def fingerprint_model_artifact(artifact_path_str: str) -> ModelFingerprint:
             status=RegistryStatus.DEPLOYED
         )
 
-    # 4. Check for ONNX Models (YuNet, SFace, etc.)
+    # 4. Check for PyTorch Model (.pth) file
+    if path.is_file() and path.suffix == ".pth":
+        file_size = path.stat().st_size
+        sha = compute_sha256(path)
+        stem = path.stem.lower()
+        if "mobilenet" in stem or "reid" in stem:
+            return ModelFingerprint(
+                artifact_path=str(path),
+                actual_family="MobileNetV3",
+                actual_variant="MobileNetV3-Small-ReID",
+                task="person_reid",
+                parameter_count=2542856,
+                input_shape="256x128",
+                weights_sha256=sha,
+                file_size_bytes=file_size,
+                runtime="TorchVision",
+                precision="FP32",
+                status=RegistryStatus.DEPLOYED
+            )
+
+    # 5. Check for ONNX Models (YuNet, SFace, CRNN, etc.)
     if path.is_file() and path.suffix == ".onnx":
         file_size = path.stat().st_size
         sha = compute_sha256(path)
@@ -190,6 +250,20 @@ def fingerprint_model_artifact(artifact_path_str: str) -> ModelFingerprint:
                 precision="FP32",
                 status=RegistryStatus.DEPLOYED
             )
+        elif "crnn" in name_lower:
+            return ModelFingerprint(
+                artifact_path=str(path),
+                actual_family="CRNN",
+                actual_variant="CRNN-CTC-PlateOCR",
+                task="plate_ocr",
+                parameter_count=8300000,
+                input_shape="100x32",
+                weights_sha256=sha,
+                file_size_bytes=file_size,
+                runtime="OpenCV_DNN_ONNX",
+                precision="FP32",
+                status=RegistryStatus.DEPLOYED
+            )
         else:
             return ModelFingerprint(
                 artifact_path=str(path),
@@ -205,7 +279,7 @@ def fingerprint_model_artifact(artifact_path_str: str) -> ModelFingerprint:
                 status=RegistryStatus.LOADABLE
             )
 
-    # 5. Default Fallback
+    # 6. Default Fallback
     return ModelFingerprint(
         artifact_path=str(path),
         actual_family="UNKNOWN",

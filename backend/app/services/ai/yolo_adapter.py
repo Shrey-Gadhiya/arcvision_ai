@@ -80,18 +80,23 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                 model_to_load = self.model_path
             else:
                 self.device = "cpu"
-                self.runtime = "OpenVINO"
-                # Check for high-performance Intel/AMD OpenVINO model
-                candidates = [
-                    Path(self.model_path).parent / "yolov8n_openvino_model",
-                    Path("yolov8n_openvino_model"),
-                    Path(__file__).parent.parent.parent.parent / "yolov8n_openvino_model",
-                ]
                 model_to_load = self.model_path
-                for c in candidates:
-                    if c.exists() and (c / "yolov8n.xml").exists():
-                        model_to_load = str(c)
-                        break
+                # Only check for OpenVINO IR if model is specifically yolov8n fallback or openvino dir
+                if "yolov8n" in str(self.model_path).lower():
+                    candidates = [
+                        Path(self.model_path).parent / "yolov8n_openvino_model",
+                        Path("yolov8n_openvino_model"),
+                        Path(__file__).parent.parent.parent.parent / "yolov8n_openvino_model",
+                    ]
+                    for c in candidates:
+                        if c.exists() and (c / "yolov8n.xml").exists():
+                            model_to_load = str(c)
+                            self.runtime = "OpenVINO"
+                            break
+                    else:
+                        self.runtime = "PyTorch_CPU"
+                else:
+                    self.runtime = "PyTorch_CPU"
 
             self.fingerprint = fingerprint_model_artifact(model_to_load)
             self.weights_hash = self.fingerprint.weights_sha256

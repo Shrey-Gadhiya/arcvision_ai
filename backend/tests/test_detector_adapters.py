@@ -55,3 +55,25 @@ def test_detector_registry():
     keys = [d["key"] for d in all_dets]
     assert "yolov8n" in keys
     assert "onnx_yolo" in keys
+
+def test_yolo26_adapter_loading_and_inference():
+    """Verify that real YOLO26 models load, fingerprint as YOLO26, and execute inference."""
+    from pathlib import Path
+    yolo26_path = Path("data/models/detection/yolo26/yolo26m.pt")
+    if yolo26_path.exists():
+        adapter = YOLODetectorAdapter(
+            name="YOLO26m Primary Perimeter Detector",
+            model_path=str(yolo26_path),
+            model_version="26.0.0",
+            device="cpu"
+        )
+        assert adapter.status == DetectorStatus.LOADED
+        assert adapter.fingerprint.actual_family == "YOLO26"
+        assert adapter.fingerprint.actual_variant == "YOLO26m"
+        assert adapter.fingerprint.parameter_count > 20_000_000
+        
+        # Run test inference on synthetic frame
+        img = np.zeros((640, 640, 3), dtype=np.uint8)
+        detections = adapter.detect(img)
+        assert isinstance(detections, list)
+

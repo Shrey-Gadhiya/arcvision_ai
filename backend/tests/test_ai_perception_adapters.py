@@ -221,3 +221,37 @@ def test_fault_isolation_on_malformed_input():
         zones=[{"id": 1, "polygon": "invalid_polygon_type"}]
     )
     assert isinstance(events, list)
+
+def test_open_vocabulary_adapter():
+    from app.services.ai.perception.open_vocabulary import OpenVocabularyDetectorAdapter
+    adapter = OpenVocabularyDetectorAdapter()
+    assert adapter.task == PerceptionTask.OPEN_VOCABULARY
+    assert adapter.status in [ModelStatus.ACTIVE, ModelStatus.STANDBY]
+    
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    res = adapter.query(frame, text_prompts=["person carrying a weapon", "backpack"])
+    assert isinstance(res, list)
+
+def test_sam_forensic_adapter():
+    from app.services.ai.perception.segmentation import SAMForensicAdapter
+    adapter = SAMForensicAdapter()
+    assert adapter.task == PerceptionTask.SAM_FORENSIC
+    assert adapter.status in [ModelStatus.ACTIVE, ModelStatus.STANDBY]
+    
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    res = adapter.segment_roi(frame, box_prompt=[0.1, 0.1, 0.5, 0.5])
+    assert res is not None
+    assert len(res.polygon) == 4
+    assert res.mask_area_ratio > 0.0
+
+def test_depth_estimation_adapter():
+    from app.services.ai.perception.depth import DepthEstimationAdapter
+    adapter = DepthEstimationAdapter()
+    assert adapter.task == PerceptionTask.DEPTH_ESTIMATION
+    assert adapter.status in [ModelStatus.ACTIVE, ModelStatus.STANDBY]
+    
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    depth_near = adapter.estimate_relative_depth(frame, bbox=(0.2, 0.6, 0.8, 0.95))
+    depth_far = adapter.estimate_relative_depth(frame, bbox=(0.4, 0.1, 0.6, 0.2))
+    assert depth_near <= depth_far # Objects lower and larger are nearer to the camera plane
+

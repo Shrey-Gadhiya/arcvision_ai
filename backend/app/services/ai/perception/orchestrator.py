@@ -12,6 +12,9 @@ from app.services.ai.perception.weapon_adapter import WeaponDetectorAdapter
 from app.services.ai.perception.action_adapter import ActionRecognizerAdapter
 from app.services.ai.perception.crowd_analyzer import CrowdAnalyzer
 from app.services.ai.perception.attribute_adapter import AttributeAnalyzerAdapter
+from app.services.ai.perception.open_vocabulary import OpenVocabularyDetectorAdapter
+from app.services.ai.perception.segmentation import SAMForensicAdapter
+from app.services.ai.perception.depth import DepthEstimationAdapter
 
 logger = logging.getLogger("arc_vision.perception.orchestrator")
 
@@ -33,6 +36,9 @@ class PerceptionOrchestrator:
         self.action_adapter = ActionRecognizerAdapter()
         self.crowd_analyzer = CrowdAnalyzer()
         self.attribute_adapter = AttributeAnalyzerAdapter()
+        self.open_vocab_adapter = OpenVocabularyDetectorAdapter()
+        self.sam_adapter = SAMForensicAdapter()
+        self.depth_adapter = DepthEstimationAdapter()
 
         self._adapters: Dict[PerceptionTask, BaseModelAdapter] = {
             PerceptionTask.POSE_ESTIMATION: self.pose_adapter,
@@ -42,6 +48,9 @@ class PerceptionOrchestrator:
             PerceptionTask.ACTION_RECOGNITION: self.action_adapter,
             PerceptionTask.CROWD_ANALYSIS: self.crowd_analyzer,
             PerceptionTask.ATTRIBUTE_ANALYSIS: self.attribute_adapter,
+            PerceptionTask.OPEN_VOCABULARY: self.open_vocab_adapter,
+            PerceptionTask.SAM_FORENSIC: self.sam_adapter,
+            PerceptionTask.DEPTH_ESTIMATION: self.depth_adapter,
         }
 
         # Initialize lightweight/deterministic analyzers
@@ -53,6 +62,9 @@ class PerceptionOrchestrator:
         self.weapon_adapter.load()
         self.action_adapter.load()
         self.attribute_adapter.load()
+        self.open_vocab_adapter.load()
+        self.sam_adapter.load()
+        self.depth_adapter.load()
 
     def get_adapter(self, task: PerceptionTask) -> Optional[BaseModelAdapter]:
         return self._adapters.get(task)

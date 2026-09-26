@@ -13,6 +13,9 @@ from app.services.ai.perception.weapon_adapter import WeaponDetectorAdapter
 from app.services.ai.perception.action_adapter import ActionRecognizerAdapter
 from app.services.ai.perception.crowd_analyzer import CrowdAnalyzer
 from app.services.ai.perception.attribute_adapter import AttributeAnalyzerAdapter
+from app.services.ai.perception.open_vocabulary import OpenVocabularyDetectorAdapter
+from app.services.ai.perception.segmentation import SAMForensicAdapter
+from app.services.ai.perception.depth import DepthEstimationAdapter
 from app.services.ai.perception.orchestrator import PerceptionOrchestrator, perception_orchestrator
 
 __all__ = [
@@ -29,6 +32,9 @@ __all__ = [
     "ActionRecognizerAdapter",
     "CrowdAnalyzer",
     "AttributeAnalyzerAdapter",
+    "OpenVocabularyDetectorAdapter",
+    "SAMForensicAdapter",
+    "DepthEstimationAdapter",
     "PerceptionOrchestrator",
     "perception_orchestrator"
 ]

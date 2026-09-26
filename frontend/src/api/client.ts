@@ -1,9 +1,18 @@
 import axios from 'axios';
 
 const getApiBaseUrl = (): string => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && (window as any).__ARCVISION_API_BASE_URL__) {
+    return (window as any).__ARCVISION_API_BASE_URL__.replace(/\/+$/, '');
+  }
   if (typeof window !== 'undefined' && window.location) {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:8000`;
+    const { protocol, hostname, port } = window.location;
+    if (port === '5173') {
+      return `${protocol}//${hostname}:8000`;
+    }
+    return `${protocol}//${hostname}${port ? `:${port}` : ''}`;
   }
   return 'http://localhost:8000';
 };
@@ -51,9 +60,16 @@ class WebSocketManager {
       return;
     }
 
-    const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : 'localhost';
-    const wsUrl = `${wsProtocol}//${hostname}:8000/ws`;
+    let wsUrl: string;
+    if (API_BASE_URL.startsWith('https://')) {
+      wsUrl = `${API_BASE_URL.replace('https://', 'wss://')}/ws`;
+    } else if (API_BASE_URL.startsWith('http://')) {
+      wsUrl = `${API_BASE_URL.replace('http://', 'ws://')}/ws`;
+    } else {
+      const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const hostname = typeof window !== 'undefined' && window.location ? window.location.hostname : 'localhost';
+      wsUrl = `${wsProtocol}//${hostname}:8000/ws`;
+    }
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {

@@ -301,6 +301,30 @@ def print_banner(public_url: str, use_cuda: bool):
     print("═" * 78)
     print("  [System Watchdog Active] Keeping services alive. Press Ctrl+C to stop.\n", flush=True)
 
+    try:
+        from IPython.display import display, HTML
+        display(HTML(f"""
+        <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid #38bdf8; border-radius: 12px; padding: 20px; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 700px; margin: 15px 0;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <span style="font-size: 24px;">🛰️</span>
+                <h2 style="color: #38bdf8; margin: 0; font-size: 20px; font-weight: 700;">ARC VISION — BORDER SURVEILLANCE CORE</h2>
+            </div>
+            <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 16px;">FastAPI Backend, React Frontend, and Cloudflare Tunnel are active and connected.</p>
+            <div style="background: #0284c7; padding: 12px 20px; border-radius: 8px; display: inline-block; margin-bottom: 16px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
+                <a href="{public_url}" target="_blank" style="color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; display: flex; align-items: center; gap: 8px;">
+                    <span>🚀 OPEN ARC VISION INTERFACE:</span>
+                    <span style="text-decoration: underline;">{public_url}</span>
+                </a>
+            </div>
+            <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px 14px; color: #94a3b8; font-size: 13px; line-height: 1.6;">
+                <div>🔑 <b>Login:</b> <code style="color: #38bdf8;">admin</code> / <code style="color: #38bdf8;">admin123</code></div>
+                <div>⚡ <b>AI Models:</b> YOLO26m ({gpu_status}) • YuNet • SFace • CRNN OCR</div>
+            </div>
+        </div>
+        """))
+    except Exception:
+        pass
+
 def run_watchdog():
     while not shutdown_requested:
         time.sleep(10)

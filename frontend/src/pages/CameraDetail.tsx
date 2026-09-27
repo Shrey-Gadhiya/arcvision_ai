@@ -322,7 +322,10 @@ export const CameraDetail: React.FC<CameraDetailProps> = ({ cameraId, cameras, o
               alt={camera.name}
               className="w-full h-full object-contain pointer-events-none"
               onError={(e) => {
-                (e.target as HTMLElement).style.display = 'none';
+                const target = e.target as HTMLImageElement;
+                setTimeout(() => {
+                  target.src = `${API_BASE_URL}/api/v1/streams/${camera.id}/live.mjpg?annotated=${showOverlays}&t=${Date.now()}`;
+                }, 2000);
               }}
             />
 

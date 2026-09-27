@@ -210,7 +210,10 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
                 alt={primaryCam.name}
                 className="w-full h-full object-contain"
                 onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
+                  const target = e.target as HTMLImageElement;
+                  setTimeout(() => {
+                    target.src = `${API_BASE_URL}/api/v1/streams/${primaryCam.id}/live.mjpg?annotated=true&t=${Date.now()}`;
+                  }, 2000);
                 }}
               />
             ) : (

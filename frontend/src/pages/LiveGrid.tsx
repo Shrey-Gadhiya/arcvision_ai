@@ -119,7 +119,10 @@ export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera }) =
                 alt={cam.name}
                 className="w-full h-full object-contain"
                 onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
+                  const target = e.target as HTMLImageElement;
+                  setTimeout(() => {
+                    target.src = `${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&t=${Date.now()}`;
+                  }, 2000);
                 }}
               />
 

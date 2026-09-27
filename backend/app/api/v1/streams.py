@@ -9,20 +9,39 @@ router = APIRouter(prefix="/streams", tags=["Live Streams"])
 async def frame_generator(camera_id: int, annotated: bool = True):
     """
     Generates standard multipart/x-mixed-replace MJPEG stream frames.
-    Event-driven by streamer frame count to eliminate buffer lags and tunnel queue congestion.
+    Auto-starts the camera streamer if not running and streams placeholder/video frames immediately.
     """
     streamer = stream_manager.get_streamer(camera_id)
     if not streamer:
-        return
+        from app.core.database import AsyncSessionLocal
+        from app.models.camera import Camera
+        from sqlalchemy import select
+        try:
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(select(Camera).where(Camera.id == camera_id))
+                cam = res.scalars().first()
+                if cam:
+                    streamer = stream_manager.start_streamer(
+                        camera_id=cam.id,
+                        camera_name=cam.name,
+                        stream_url=cam.rtsp_url,
+                        stream_type=cam.stream_type.value,
+                        target_fps=cam.target_fps,
+                        is_night_mode=bool(cam.night_mode_enabled),
+                        anpr_enabled=bool(cam.anpr_enabled)
+                    )
+        except Exception:
+            pass
 
     last_count = -1
-    fps = max(20, streamer.target_fps)
-    max_sleep = 1.0 / fps
+    fps = max(20, streamer.target_fps if streamer else 25)
 
     try:
-        while streamer.is_running:
+        # If streamer is initializing, stream tactical connecting frames
+        retries = 0
+        while streamer and streamer.is_running:
             curr_count = streamer.frame_count
-            if curr_count != last_count:
+            if curr_count != last_count or curr_count == 0:
                 last_count = curr_count
                 jpeg_bytes = streamer.get_jpeg_bytes(annotated=annotated)
                 if jpeg_bytes is not None:
@@ -30,7 +49,7 @@ async def frame_generator(camera_id: int, annotated: bool = True):
                         b'--frame\r\n'
                         b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n'
                     )
-            await asyncio.sleep(0.015)
+            await asyncio.sleep(0.02)
     except (asyncio.CancelledError, GeneratorExit):
         pass
     except Exception:
@@ -38,10 +57,6 @@ async def frame_generator(camera_id: int, annotated: bool = True):
 
 @router.get("/{camera_id}/live.mjpg")
 async def get_live_mjpeg(camera_id: int, annotated: bool = True):
-    streamer = stream_manager.get_streamer(camera_id)
-    if not streamer:
-        raise HTTPException(status_code=404, detail="Camera stream worker not running")
-
     return StreamingResponse(
         frame_generator(camera_id, annotated=annotated),
         media_type="multipart/x-mixed-replace; boundary=frame",

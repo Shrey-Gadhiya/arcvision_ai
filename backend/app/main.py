@@ -226,10 +226,27 @@ class SPAStaticFiles(StaticFiles):
             response = await super().get_response("index.html", scope)
         return response
 
-frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-if (frontend_dist / "index.html").exists():
+frontend_candidates = [
+    Path(__file__).resolve().parent.parent.parent / "frontend" / "dist",
+    Path.cwd().parent / "frontend" / "dist",
+    Path.cwd() / "frontend" / "dist",
+    Path("/content/ARCVISION/frontend/dist"),
+    Path("/kaggle/working/ARCVISION/frontend/dist"),
+    Path("frontend/dist"),
+    Path("../frontend/dist"),
+]
+
+frontend_dist = None
+for candidate in frontend_candidates:
+    if (candidate / "index.html").exists():
+        frontend_dist = candidate
+        break
+
+if frontend_dist:
+    logger.info(f"Serving unified Frontend SPA from: {frontend_dist}")
     app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend_spa")
 else:
+    logger.warning("No prebuilt frontend/dist found — fallback API root active.")
     @app.get("/")
     async def root():
         return {

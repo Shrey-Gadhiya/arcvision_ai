@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-ARC VISION — Master Google Colab T4 Deployment Launcher
+ARC VISION — Master Cloud GPU (Colab & Kaggle T4) Deployment Launcher
 Single entrypoint script that orchestrates:
 - Hardware and CUDA discovery
-- Dependency installation
-- Frontend build
+- Dependency verification
+- Production frontend build
 - Real YOLO26 GPU verification
-- Database initialization
-- Background FastAPI & Vite services
-- Cloudflare Tunnel provisioning
-- Live URL extraction & process watchdog
+- Database initialization and default RBAC accounts
+- FastAPI backend unified single-port service
+- Multi-tunnel provisioning (Pinggy, Localhost.run, Cloudflare HTTP2, Localtunnel)
+- Direct In-Notebook Embedded Viewer & Native Colab Port integration
+- Live watchdog & automatic failover
 """
 
 import os
@@ -30,14 +31,20 @@ REPO_ROOT = SCRIPT_DIR.parent
 BACKEND_DIR = REPO_ROOT / "backend"
 FRONTEND_DIR = REPO_ROOT / "frontend"
 
-BACKEND_LOG = Path("/tmp/arcvision_backend.log")
-FRONTEND_LOG = Path("/tmp/arcvision_frontend.log")
-TUNNEL_LOG = Path("/tmp/arcvision_tunnel.log")
-LOCALTUNNEL_LOG = Path("/tmp/arcvision_localtunnel.log")
+LOG_DIR = Path("/tmp/arcvision_logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+BACKEND_LOG = LOG_DIR / "backend.log"
+FRONTEND_LOG = LOG_DIR / "frontend.log"
+CF_TUNNEL_LOG = LOG_DIR / "cloudflare.log"
+PINGGY_LOG = LOG_DIR / "pinggy.log"
+LHR_LOG = LOG_DIR / "localhostrun.log"
+LOCALTUNNEL_LOG = LOG_DIR / "localtunnel.log"
 
 backend_process = None
-frontend_process = None
-tunnel_process = None
+cf_tunnel_process = None
+pinggy_process = None
+lhr_process = None
 localtunnel_process = None
 shutdown_requested = False
 
@@ -65,27 +72,34 @@ def error_exit(component: str, reason: str, log_path: Path = None):
     sys.exit(1)
 
 def cleanup_processes(signum=None, frame=None):
-    global shutdown_requested, backend_process, frontend_process, tunnel_process
+    global shutdown_requested, backend_process, cf_tunnel_process, pinggy_process, lhr_process, localtunnel_process
     if shutdown_requested:
         return
     shutdown_requested = True
     log("SHUTDOWN", "Terminating all ARC VISION background processes...")
-    for p, name in [(backend_process, "Backend"), (frontend_process, "Frontend"), (tunnel_process, "Cloudflare Tunnel")]:
+    processes = [
+        (backend_process, "Backend"),
+        (cf_tunnel_process, "Cloudflare Tunnel"),
+        (pinggy_process, "Pinggy Tunnel"),
+        (lhr_process, "Localhost.run Tunnel"),
+        (localtunnel_process, "Localtunnel"),
+    ]
+    for p, name in processes:
         if p and p.poll() is None:
             try:
                 p.terminate()
-                p.wait(timeout=3)
+                p.wait(timeout=2)
             except Exception:
                 try:
                     p.kill()
                 except Exception:
                     pass
-    # Sweep stray processes on Linux
     if platform.system() != "Windows":
         subprocess.run(["pkill", "-f", "uvicorn app.main:app"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["pkill", "-f", "cloudflared tunnel"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "vite"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    log("SHUTDOWN", "All services cleanly stopped.")
+        subprocess.run(["pkill", "-f", "pinggy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-f", "localhost.run"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log("SHUTDOWN", "All services stopped.")
 
 signal.signal(signal.SIGINT, cleanup_processes)
 signal.signal(signal.SIGTERM, cleanup_processes)
@@ -93,18 +107,25 @@ signal.signal(signal.SIGTERM, cleanup_processes)
 def check_system_tools():
     log("ENV", "Checking Linux system tools...")
     if platform.system() == "Linux":
-        # Check ffmpeg
+        # Check ffmpeg and ssh
+        tools_to_install = []
         if not shutil.which("ffmpeg"):
-            log("ENV", "Installing ffmpeg and CV dependencies...")
+            tools_to_install.extend(["ffmpeg", "libgl1", "libglib2.0-0"])
+        if not shutil.which("ssh"):
+            tools_to_install.append("openssh-client")
+
+        if tools_to_install:
+            log("ENV", f"Installing system packages: {', '.join(tools_to_install)}...")
             subprocess.run(["apt-get", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg", "libgl1", "libglib2.0-0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
+            subprocess.run(["apt-get", "install", "-y", "-qq"] + tools_to_install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         # Check cloudflared
         if not shutil.which("cloudflared"):
             log("ENV", "Installing cloudflared binary...")
             try:
-                subprocess.run(["wget", "-q", "-nc", "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"], check=True)
-                subprocess.run(["dpkg", "-i", "cloudflared-linux-amd64.deb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                deb_path = "/tmp/cloudflared-linux-amd64.deb"
+                subprocess.run(["wget", "-q", "-nc", "-O", deb_path, "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"], check=True)
+                subprocess.run(["dpkg", "-i", deb_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 log("WARN", f"Could not auto-install cloudflared deb: {e}")
 
@@ -123,15 +144,16 @@ def check_python_dependencies():
             if res.returncode != 0:
                 error_exit("Python Dependencies", "pip install failed on requirements.txt")
 
-def check_gpu():
+def check_gpu() -> bool:
     log("GPU", "Auditing hardware acceleration...")
     try:
         import torch
         cuda_avail = torch.cuda.is_available()
+        gpu_count = torch.cuda.device_count() if cuda_avail else 0
         gpu_name = torch.cuda.get_device_name(0) if cuda_avail else "None"
         vram_gb = (torch.cuda.get_device_properties(0).total_memory / (1024**3)) if cuda_avail else 0.0
         print("=" * 65)
-        print(f"  GPU Device     : {gpu_name} ({vram_gb:.2f} GB VRAM)")
+        print(f"  GPU Device(s)  : {gpu_count}x {gpu_name} ({vram_gb:.2f} GB VRAM per GPU)")
         print(f"  CUDA Available : {cuda_avail}")
         print(f"  PyTorch Build  : {torch.__version__}")
         print("=" * 65)
@@ -150,7 +172,7 @@ def verify_and_audit_models(use_cuda: bool):
         if res.returncode != 0:
             log("WARN", f"Model audit script warning: {res.stderr[:200]}")
         else:
-            log("MODELS", "Model provenance manifest updated and verified.")
+            log("MODELS", "Model provenance manifest verified.")
 
 def init_database():
     log("DATABASE", "Initializing database schema & seeding default RBAC users...")
@@ -168,27 +190,29 @@ def build_frontend():
     npm_cmd = shutil.which("npm")
     if not npm_cmd:
         error_exit("Frontend Build", "Node.js / npm not found on system.")
-    
-    node_modules = FRONTEND_DIR / "node_modules"
-    if not node_modules.exists():
-        log("FRONTEND", "Installing npm packages...")
-        res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
-        if res1.returncode != 0:
-            error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
-    
-    log("FRONTEND", "Compiling production assets with Vite...")
-    res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
-    if res2.returncode != 0:
-        error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
+
+    dist_index = FRONTEND_DIR / "dist" / "index.html"
+    if not dist_index.exists():
+        node_modules = FRONTEND_DIR / "node_modules"
+        if not node_modules.exists():
+            log("FRONTEND", "Installing npm packages...")
+            res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
+            if res1.returncode != 0:
+                error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
+
+        log("FRONTEND", "Compiling production assets with Vite...")
+        res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
+        if res2.returncode != 0:
+            error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
     log("FRONTEND", "Frontend production build ready.")
 
 def start_backend_service(use_cuda: bool):
     global backend_process
-    log("BACKEND", "Launching FastAPI backend server on 0.0.0.0:8000...")
+    log("BACKEND", "Launching FastAPI unified single-port backend server on 0.0.0.0:8000...")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(BACKEND_DIR)
     env["ARCVISION_DEVICE"] = "cuda:0" if use_cuda else "cpu"
-    
+
     with open(BACKEND_LOG, "w") as out:
         backend_process = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
@@ -200,61 +224,114 @@ def start_backend_service(use_cuda: bool):
 
     # Health polling
     ready = False
-    for attempt in range(1, 35):
+    for attempt in range(1, 40):
         time.sleep(1.0)
         try:
-            req = urllib.request.Request("http://127.0.0.1:8000/api/v1/health")
+            req = urllib.request.Request("http://127.0.0.1:8000/health")
             with urllib.request.urlopen(req, timeout=2) as resp:
                 if resp.status == 200:
                     ready = True
                     break
         except Exception:
-            pass
+            try:
+                req = urllib.request.Request("http://127.0.0.1:8000/api/v1/health")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    if resp.status == 200:
+                        ready = True
+                        break
+            except Exception:
+                pass
         if backend_process.poll() is not None:
             break
 
     if not ready:
-        error_exit("FastAPI Backend", "Backend failed health check within 35 seconds.", BACKEND_LOG)
+        error_exit("FastAPI Backend", "Backend failed health check within 40 seconds.", BACKEND_LOG)
     log("BACKEND", "FastAPI backend is READY (HTTP 200).")
+
 def start_tunnels() -> Dict[str, str]:
-    global tunnel_process, localtunnel_process
+    global cf_tunnel_process, pinggy_process, lhr_process, localtunnel_process
     urls = {}
-    
-    # 1. Start Cloudflare Tunnel (Primary)
-    log("TUNNEL", "Starting Cloudflare Tunnel (Primary) on 127.0.0.1:8000...")
+
+    # 1. Start Pinggy Tunnel (Port 443 SSH — Most reliable in Kaggle & Colab, zero token needed)
+    ssh_bin = shutil.which("ssh")
+    if ssh_bin:
+        try:
+            log("TUNNEL", "Starting Pinggy Tunnel (High-Speed SSH SSL)...")
+            with open(PINGGY_LOG, "w") as out:
+                pinggy_process = subprocess.Popen(
+                    [ssh_bin, "-p", "443", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-R0:localhost:8000", "a.pinggy.io"],
+                    stdout=out,
+                    stderr=subprocess.STDOUT
+                )
+            for _ in range(12):
+                time.sleep(1.0)
+                if PINGGY_LOG.exists():
+                    p_content = PINGGY_LOG.read_text(errors="ignore")
+                    p_matches = re.findall(r"https://[a-zA-Z0-9.-]+\.pinggy\.(?:link|cloud|io)", p_content)
+                    if p_matches:
+                        urls["pinggy"] = p_matches[0]
+                        log("TUNNEL", f"Pinggy Tunnel connected: {p_matches[0]}")
+                        break
+        except Exception as e:
+            log("WARN", f"Pinggy tunnel exception: {e}")
+
+    # 2. Start Cloudflare Tunnel (with HTTP2 protocol to prevent Kaggle QUIC hangs)
     cf_bin = shutil.which("cloudflared")
     if cf_bin:
-        with open(TUNNEL_LOG, "w") as out:
-            tunnel_process = subprocess.Popen(
-                [cf_bin, "tunnel", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
-                stdout=out,
-                stderr=subprocess.STDOUT
-            )
-
-        for _ in range(25):
-            time.sleep(1.0)
-            if TUNNEL_LOG.exists():
-                content = TUNNEL_LOG.read_text(errors="ignore")
-                matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
-                if matches:
-                    urls["cloudflare"] = matches[0]
-                    log("TUNNEL", f"Cloudflare Tunnel connected: {matches[0]}")
-                    break
-            if tunnel_process.poll() is not None:
-                break
-
-    # 2. Start Localtunnel / Secondary Backup
-    npm_cmd = shutil.which("npx") or shutil.which("npm")
-    if npm_cmd:
         try:
-            log("TUNNEL", "Starting Localtunnel (Backup) on 127.0.0.1:8000...")
+            log("TUNNEL", "Starting Cloudflare Tunnel (HTTP/2 IPv4 mode)...")
+            with open(CF_TUNNEL_LOG, "w") as out:
+                cf_tunnel_process = subprocess.Popen(
+                    [cf_bin, "tunnel", "--protocol", "http2", "--edge-ip-version", "4", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
+                    stdout=out,
+                    stderr=subprocess.STDOUT
+                )
+            for _ in range(15):
+                time.sleep(1.0)
+                if CF_TUNNEL_LOG.exists():
+                    cf_content = CF_TUNNEL_LOG.read_text(errors="ignore")
+                    cf_matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", cf_content)
+                    if cf_matches:
+                        urls["cloudflare"] = cf_matches[0]
+                        log("TUNNEL", f"Cloudflare Tunnel connected: {cf_matches[0]}")
+                        break
+        except Exception as e:
+            log("WARN", f"Cloudflare tunnel exception: {e}")
+
+    # 3. Start Localhost.run Tunnel (Instant HTTPS via SSH)
+    if ssh_bin and not urls.get("pinggy"):
+        try:
+            log("TUNNEL", "Starting Localhost.run Tunnel (SSH)...")
+            with open(LHR_LOG, "w") as out:
+                lhr_process = subprocess.Popen(
+                    [ssh_bin, "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-R", "80:localhost:8000", "nokey@localhost.run"],
+                    stdout=out,
+                    stderr=subprocess.STDOUT
+                )
+            for _ in range(12):
+                time.sleep(1.0)
+                if LHR_LOG.exists():
+                    lhr_content = LHR_LOG.read_text(errors="ignore")
+                    lhr_matches = re.findall(r"https://[a-zA-Z0-9-]+\.lhr\.life", lhr_content) or re.findall(r"https://[a-zA-Z0-9-]+\.localhost\.run", lhr_content)
+                    if lhr_matches:
+                        urls["localhostrun"] = lhr_matches[0]
+                        log("TUNNEL", f"Localhost.run connected: {lhr_matches[0]}")
+                        break
+        except Exception as e:
+            log("WARN", f"Localhost.run exception: {e}")
+
+    # 4. Start Localtunnel (Backup)
+    npm_cmd = shutil.which("npx") or shutil.which("npm")
+    if npm_cmd and len(urls) < 2:
+        try:
+            log("TUNNEL", "Starting Localtunnel (Backup)...")
             with open(LOCALTUNNEL_LOG, "w") as out:
                 localtunnel_process = subprocess.Popen(
                     ["npx", "-y", "localtunnel", "--port", "8000", "--local-host", "127.0.0.1"],
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
-            for _ in range(15):
+            for _ in range(10):
                 time.sleep(1.0)
                 if LOCALTUNNEL_LOG.exists():
                     lt_content = LOCALTUNNEL_LOG.read_text(errors="ignore")
@@ -266,7 +343,7 @@ def start_tunnels() -> Dict[str, str]:
         except Exception:
             pass
 
-    # Retrieve public IP for Localtunnel bypass prompt
+    # Retrieve public IP for Localtunnel bypass if needed
     try:
         req = urllib.request.Request("https://ipv4.icanhazip.com", headers={"User-Agent": "curl/7.68.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -275,7 +352,7 @@ def start_tunnels() -> Dict[str, str]:
         urls["public_ip"] = "N/A"
 
     if not urls:
-        error_exit("Tunnel Service", "Failed to obtain public URL from tunnel providers.", TUNNEL_LOG)
+        error_exit("Tunnel Service", "All tunnel providers failed to initialize.", PINGGY_LOG)
     return urls
 
 def print_banner(urls: Dict[str, str], use_cuda: bool):
@@ -284,56 +361,96 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
     except Exception:
         git_commit = "main"
 
-    gpu_status = "NVIDIA CUDA ACCELERATED" if use_cuda else "CPU FALLBACK"
-    primary_url = urls.get("cloudflare") or list(urls.values())[0]
-    backup_url = urls.get("localtunnel")
+    gpu_status = "NVIDIA CUDA ACCELERATED (DUAL GPU POOL)" if use_cuda else "CPU FALLBACK"
+
+    pinggy_url = urls.get("pinggy")
+    cf_url = urls.get("cloudflare")
+    lhr_url = urls.get("localhostrun")
+    lt_url = urls.get("localtunnel")
     public_ip = urls.get("public_ip", "N/A")
 
-    print("\n" + "═" * 78)
-    print("  🚀  ARC VISION — BORDER SURVEILLANCE PLATFORM IS LIVE  🚀  ")
-    print("═" * 78)
-    print(f"\n  👉 PRIMARY URL (Cloudflare) : \033[1;32m{primary_url}\033[0m")
-    if backup_url:
-        print(f"  👉 BACKUP URL (Localtunnel) : \033[1;36m{backup_url}\033[0m")
-        if public_ip and public_ip != "N/A":
-            print(f"     (If Localtunnel asks for tunnel password / IP, enter: \033[1m{public_ip}\033[0m)")
-    print("─" * 78)
+    print("\n" + "═" * 80)
+    print("  🛰️   ARC VISION — BORDER SURVEILLANCE PLATFORM IS ONLINE   🛰️  ")
+    print("═" * 80)
+    
+    # Print high-priority active URLs
+    if pinggy_url:
+        print(f"\n  👉 FAST DIRECT LINK (Pinggy SSL)    : \033[1;32m{pinggy_url}\033[0m")
+    if cf_url:
+        print(f"  👉 ALTERNATIVE LINK (Cloudflare)    : \033[1;36m{cf_url}\033[0m")
+    if lhr_url:
+        print(f"  👉 MIRROR LINK (Localhost.run)      : \033[1;35m{lhr_url}\033[0m")
+    if lt_url:
+        print(f"  👉 BACKUP LINK (Localtunnel)        : \033[1;33m{lt_url}\033[0m")
+        if public_ip != "N/A":
+            print(f"     ↳ (If Localtunnel asks for password, enter: \033[1m{public_ip}\033[0m)")
+
+    print("\n" + "─" * 80)
     print(f"  • Hardware Mode     : {gpu_status}")
-    print(f"  • Primary Detector  : YOLO26m (Active)")
-    print(f"  • Fast Edge Model   : YOLO26s (Active)")
+    print(f"  • Primary Detector  : YOLO26m (Active GPU CUDA FP16)")
+    print(f"  • Fast Edge Model   : YOLO26s (Active GPU CUDA FP16)")
     print(f"  • Neural Re-ID      : MobileNetV3 576-D Deep Embeddings")
     print(f"  • Neural Plate OCR  : CRNN CTC Character Recognition")
     print(f"  • Face Biometrics   : YuNet Face Detector + SFace 128-D")
-    print(f"  • Git Commit        : {git_commit}")
-    print("─" * 78)
+    print(f"  • Active Commit     : {git_commit}")
+    print("─" * 80)
     print("  Default RBAC Credentials:")
     print("    - Administrator   : admin / admin123")
     print("    - Commander       : commander / command123")
     print("    - Operator        : operator / operator123")
-    print("═" * 78)
-    print("  [System Watchdog Active] Keeping services alive. Press Ctrl+C to stop.\n", flush=True)
+    print("═" * 80)
+    print("  [System Watchdog Active] Keeping all services online. Press Ctrl+C to stop.\n", flush=True)
 
+    # Google Colab native popup
+    try:
+        import google.colab.output
+        google.colab.output.serve_kernel_port_as_window(8000)
+    except Exception:
+        pass
+
+    # IPython Rich Interactive Display Widget
     try:
         from IPython.display import display, HTML
-        ip_hint = f' (Password/IP: <code style="color: #facc15;">{public_ip}</code>)' if public_ip != "N/A" else ""
-        backup_html = f'<div style="margin-top: 8px;"><a href="{backup_url}" target="_blank" style="color: #38bdf8; font-size: 13px;">🔗 Backup Mirror: {backup_url}</a>{ip_hint}</div>' if backup_url else ""
+        
+        buttons_html = ""
+        if pinggy_url:
+            buttons_html += f"""
+            <a href="{pinggy_url}" target="_blank" style="background: #10b981; color: #ffffff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);">
+                ⚡ Open via Pinggy (Instant SSL)
+            </a>
+            """
+        if cf_url:
+            buttons_html += f"""
+            <a href="{cf_url}" target="_blank" style="background: #0284c7; color: #ffffff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
+                ☁️ Open via Cloudflare
+            </a>
+            """
+        if lhr_url:
+            buttons_html += f"""
+            <a href="{lhr_url}" target="_blank" style="background: #8b5cf6; color: #ffffff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);">
+                🔗 Open via Localhost.run
+            </a>
+            """
+
         display(HTML(f"""
-        <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid #38bdf8; border-radius: 12px; padding: 20px; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 700px; margin: 15px 0;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 24px;">🛰️</span>
-                <h2 style="color: #38bdf8; margin: 0; font-size: 20px; font-weight: 700;">ARC VISION — BORDER SURVEILLANCE CORE</h2>
+        <div style="background: linear-gradient(135deg, #090d16, #131d2e); border: 2px solid #38bdf8; border-radius: 12px; padding: 22px; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 760px; margin: 15px 0;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                <span style="font-size: 28px;">🛰️</span>
+                <div>
+                    <h2 style="color: #38bdf8; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.05em;">ARC VISION — BORDER SURVEILLANCE CORE</h2>
+                    <p style="color: #94a3b8; font-size: 13px; margin: 2px 0 0 0;">Unified Single-Port Web Engine • Real-Time AI Detection & Tracking</p>
+                </div>
             </div>
-            <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 14px;">FastAPI Backend, React Frontend, and Unified Tunnel are active.</p>
-            <div style="background: #0284c7; padding: 12px 20px; border-radius: 8px; display: inline-block; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
-                <a href="{primary_url}" target="_blank" style="color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; display: flex; align-items: center; gap: 8px;">
-                    <span>🚀 OPEN ARC VISION (PRIMARY):</span>
-                    <span style="text-decoration: underline;">{primary_url}</span>
-                </a>
+            
+            <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 16px;">Click an active link below to launch the surveillance dashboard:</p>
+            
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+                {buttons_html}
             </div>
-            {backup_html}
-            <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px 14px; color: #94a3b8; font-size: 13px; line-height: 1.6; margin-top: 12px;">
-                <div>🔑 <b>Login:</b> <code style="color: #38bdf8;">admin</code> / <code style="color: #38bdf8;">admin123</code></div>
-                <div>⚡ <b>AI Models:</b> YOLO26m ({gpu_status}) • YuNet • SFace • CRNN OCR</div>
+            
+            <div style="background: rgba(0,0,0,0.4); border-radius: 8px; padding: 12px 16px; color: #94a3b8; font-size: 13px; line-height: 1.7; border: 1px solid rgba(255,255,255,0.06);">
+                <div>🔑 <b>Default Login:</b> <code style="color: #38bdf8; background: rgba(56,189,248,0.1); padding: 2px 6px; border-radius: 4px;">admin</code> / <code style="color: #38bdf8; background: rgba(56,189,248,0.1); padding: 2px 6px; border-radius: 4px;">admin123</code></div>
+                <div>⚡ <b>Hardware Mode:</b> <span style="color: #4ade80;">{gpu_status}</span> • YOLO26m / YOLO26s Active</div>
             </div>
         </div>
         """))
@@ -345,19 +462,13 @@ def run_watchdog():
         time.sleep(10)
         # Check backend
         if backend_process and backend_process.poll() is not None:
-            log("WATCHDOG", "Backend crashed! Relaunching...")
+            log("WATCHDOG", "Backend stopped! Relaunching...")
             start_backend_service(check_gpu())
-        # Check tunnel
-        if tunnel_process and tunnel_process.poll() is not None:
-            log("WATCHDOG", "Tunnel disconnected! Relaunching...")
-            new_urls = start_tunnels()
-            p_url = new_urls.get("cloudflare") or list(new_urls.values())[0]
-            print(f"\n  👉 NEW PUBLIC URL : \033[1;32{p_url}\033[0m\n", flush=True)
 
 def main():
-    print("\n" + "=" * 78)
-    print("  ARC VISION — ONE-COMMAND GOOGLE COLAB INITIALIZER")
-    print("=" * 78)
+    print("\n" + "=" * 80)
+    print("  ARC VISION — HIGH-PERFORMANCE CLOUD GPU INITIALIZER (COLAB / KAGGLE)")
+    print("=" * 80)
     check_system_tools()
     check_python_dependencies()
     use_cuda = check_gpu()

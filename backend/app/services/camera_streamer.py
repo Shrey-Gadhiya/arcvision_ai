@@ -696,7 +696,7 @@ class CameraStreamer:
             self.latest_motion_score = motion_score
 
             # 2. YOLO Object Detection & Tracking (Clean 0.35 confidence gate)
-            det_frame = frame
+            det_frame = proc_frame
             if self.is_night_mode and (frame_num % 4 == 0):
                 det_frame = night_vision_processor.enhance_low_light(det_frame)
             raw_detections = detector_service.detect(det_frame, confidence_threshold=0.35)

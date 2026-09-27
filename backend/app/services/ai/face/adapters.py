@@ -71,22 +71,34 @@ class YuNetFaceDetectorAdapter(BaseFaceDetectorAdapter):
             return False
 
         try:
-            backend_id = cv2.dnn.DNN_BACKEND_OPENCV
-            target_id = cv2.dnn.DNN_TARGET_CPU
-            if self.device == "cuda":
-                backend_id = cv2.dnn.DNN_BACKEND_CUDA
-                target_id = cv2.dnn.DNN_TARGET_CUDA
-
-            self.detector = cv2.FaceDetectorYN.create(
-                model=self.model_path,
-                config="",
-                input_size=self.input_size,
-                score_threshold=self.score_threshold,
-                nms_threshold=self.nms_threshold,
-                top_k=self.top_k,
-                backend_id=backend_id,
-                target_id=target_id
-            )
+            try:
+                backend_id = cv2.dnn.DNN_BACKEND_OPENCV
+                target_id = cv2.dnn.DNN_TARGET_CPU
+                if self.device == "cuda" or str(self.device).startswith("cuda"):
+                    backend_id = cv2.dnn.DNN_BACKEND_CUDA
+                    target_id = cv2.dnn.DNN_TARGET_CUDA
+                self.detector = cv2.FaceDetectorYN.create(
+                    model=self.model_path,
+                    config="",
+                    input_size=self.input_size,
+                    score_threshold=self.score_threshold,
+                    nms_threshold=self.nms_threshold,
+                    top_k=self.top_k,
+                    backend_id=backend_id,
+                    target_id=target_id
+                )
+            except Exception:
+                # Fallback to OpenCV CPU
+                self.detector = cv2.FaceDetectorYN.create(
+                    model=self.model_path,
+                    config="",
+                    input_size=self.input_size,
+                    score_threshold=self.score_threshold,
+                    nms_threshold=self.nms_threshold,
+                    top_k=self.top_k,
+                    backend_id=cv2.dnn.DNN_BACKEND_OPENCV,
+                    target_id=cv2.dnn.DNN_TARGET_CPU
+                )
             self.status = AdapterStatus.LOADED
             self.last_error = None
             return True

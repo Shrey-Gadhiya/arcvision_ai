@@ -26,8 +26,12 @@ class DetectorRegistry:
         import torch
         
         target_device = os.getenv("ARCVISION_DEVICE")
-        if not target_device:
+        if not target_device or target_device in ["auto", "cuda", "cuda:0", "gpu"]:
             target_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        elif torch.cuda.is_available():
+            target_device = "cuda:0"
+        else:
+            target_device = "cpu"
             
         models_dir = Path(__file__).resolve().parent.parent.parent / "data" / "models"
         yolo26_dir = models_dir / "detection" / "yolo26"

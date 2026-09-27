@@ -73,10 +73,11 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
             import torch
             from pathlib import Path
             
-            # Auto-detect CUDA if device is auto or cuda
-            if self.device in ["auto", "cuda", "cuda:0"] and torch.cuda.is_available():
+            # Auto-detect CUDA if GPU is available
+            if torch.cuda.is_available():
                 self.device = "cuda:0"
                 self.runtime = "CUDA_FP16" if self.precision == "fp16" else "CUDA_FP32"
+                torch.backends.cudnn.benchmark = True
                 model_to_load = self.model_path
             else:
                 self.device = "cpu"
@@ -103,6 +104,17 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
             self.model = YOLO(model_to_load)
             if str(self.device).startswith("cuda"):
                 self.model.to(self.device)
+                try:
+                    self.model.fuse()
+                except Exception:
+                    pass
+                # Warmup forward pass on GPU
+                try:
+                    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+                    self.model(dummy, device=self.device, half=(self.precision == "fp16"), verbose=False)
+                except Exception:
+                    pass
+
             self.status = DetectorStatus.LOADED
             self.last_error = None
             logger.info(f"Loaded {self.fingerprint.actual_variant} ({self.fingerprint.actual_family}, {self.fingerprint.parameter_count} params) from {model_to_load} on {self.device} [{self.runtime}]")
@@ -133,12 +145,14 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
 
         try:
             model_names = getattr(self.model, "names", {})
+            is_cuda = str(self.device).startswith("cuda")
             predict_kwargs = {
                 "conf": confidence_threshold,
                 "imgsz": 640,
                 "agnostic_nms": True,
                 "iou": 0.45,
                 "device": self.device,
+                "half": is_cuda and (self.precision == "fp16"),
                 "verbose": False
             }
             results = self.model(frame, **predict_kwargs)

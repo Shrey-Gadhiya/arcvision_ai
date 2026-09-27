@@ -1,13 +1,49 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="background-color: #050507;">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>ARC VISION — Tactical Surveillance Platform</title>
+    <style>
+      body {
+        margin: 0;
+        background-color: #050507;
+        color: #f4f4f5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      #initial-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background-color: #050507;
+        z-index: 9999;
+      }
+      .loader-spin {
+        width: 36px;
+        height: 36px;
+        border: 3px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="initial-loader">
+        <div class="loader-spin"></div>
+        <p style="margin-top: 16px; font-size: 13px; font-weight: 600; letter-spacing: 0.1em; color: #a1a1aa; text-transform: uppercase;">
+          Initializing ARC VISION Core…
+        </p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

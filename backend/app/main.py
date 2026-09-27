@@ -154,6 +154,9 @@ app = FastAPI(
 )
 
 # CORS Configuration for local & multi-device LAN access
+from fastapi.middleware.gzip import GZipMiddleware
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,

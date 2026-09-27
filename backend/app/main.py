@@ -1,9 +1,11 @@
 import asyncio
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app.core.config import settings
 from app.core.database import init_db, AsyncSessionLocal
@@ -211,7 +213,6 @@ app.include_router(ws.router) # also mount /ws at root for convenience
 app.include_router(health.router) # also mount /health at root for convenience
 
 # Optional SPA Frontend Mounting if dist/ exists
-from fastapi.responses import FileResponse
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if (frontend_dist / "index.html").exists():
     if (frontend_dist / "assets").exists():

@@ -252,31 +252,24 @@ def start_tunnels() -> Dict[str, str]:
     global cf_tunnel_process, pinggy_process, lhr_process, localtunnel_process
     urls = {}
 
-    # 1. Start Pinggy Tunnel (Port 443 SSH — Most reliable in Kaggle & Colab, zero token needed)
     ssh_bin = shutil.which("ssh")
+    cf_bin = shutil.which("cloudflared")
+    npm_cmd = shutil.which("npx") or shutil.which("npm")
+
+    # 1. Start Pinggy Tunnel (Port 443 SSH SSL)
     if ssh_bin:
         try:
-            log("TUNNEL", "Starting Pinggy Tunnel (High-Speed SSH SSL)...")
+            log("TUNNEL", "Starting Pinggy Tunnel (SSH Port 443)...")
             with open(PINGGY_LOG, "w") as out:
                 pinggy_process = subprocess.Popen(
                     [ssh_bin, "-p", "443", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-R0:localhost:8000", "a.pinggy.io"],
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
-            for _ in range(12):
-                time.sleep(1.0)
-                if PINGGY_LOG.exists():
-                    p_content = PINGGY_LOG.read_text(errors="ignore")
-                    p_matches = re.findall(r"https://[a-zA-Z0-9.-]+\.pinggy\.(?:link|cloud|io)", p_content)
-                    if p_matches:
-                        urls["pinggy"] = p_matches[0]
-                        log("TUNNEL", f"Pinggy Tunnel connected: {p_matches[0]}")
-                        break
         except Exception as e:
-            log("WARN", f"Pinggy tunnel exception: {e}")
+            log("WARN", f"Pinggy launch failed: {e}")
 
-    # 2. Start Cloudflare Tunnel (with HTTP2 protocol to prevent Kaggle QUIC hangs)
-    cf_bin = shutil.which("cloudflared")
+    # 2. Start Cloudflare Tunnel (HTTP2 protocol IPv4)
     if cf_bin:
         try:
             log("TUNNEL", "Starting Cloudflare Tunnel (HTTP/2 IPv4 mode)...")
@@ -286,20 +279,11 @@ def start_tunnels() -> Dict[str, str]:
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
-            for _ in range(15):
-                time.sleep(1.0)
-                if CF_TUNNEL_LOG.exists():
-                    cf_content = CF_TUNNEL_LOG.read_text(errors="ignore")
-                    cf_matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", cf_content)
-                    if cf_matches:
-                        urls["cloudflare"] = cf_matches[0]
-                        log("TUNNEL", f"Cloudflare Tunnel connected: {cf_matches[0]}")
-                        break
         except Exception as e:
-            log("WARN", f"Cloudflare tunnel exception: {e}")
+            log("WARN", f"Cloudflare launch failed: {e}")
 
-    # 3. Start Localhost.run Tunnel (Instant HTTPS via SSH)
-    if ssh_bin and not urls.get("pinggy"):
+    # 3. Start Localhost.run Tunnel (SSH)
+    if ssh_bin:
         try:
             log("TUNNEL", "Starting Localhost.run Tunnel (SSH)...")
             with open(LHR_LOG, "w") as out:
@@ -308,21 +292,11 @@ def start_tunnels() -> Dict[str, str]:
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
-            for _ in range(12):
-                time.sleep(1.0)
-                if LHR_LOG.exists():
-                    lhr_content = LHR_LOG.read_text(errors="ignore")
-                    lhr_matches = re.findall(r"https://[a-zA-Z0-9-]+\.lhr\.life", lhr_content) or re.findall(r"https://[a-zA-Z0-9-]+\.localhost\.run", lhr_content)
-                    if lhr_matches:
-                        urls["localhostrun"] = lhr_matches[0]
-                        log("TUNNEL", f"Localhost.run connected: {lhr_matches[0]}")
-                        break
         except Exception as e:
-            log("WARN", f"Localhost.run exception: {e}")
+            log("WARN", f"Localhost.run launch failed: {e}")
 
     # 4. Start Localtunnel (Backup)
-    npm_cmd = shutil.which("npx") or shutil.which("npm")
-    if npm_cmd and len(urls) < 2:
+    if npm_cmd:
         try:
             log("TUNNEL", "Starting Localtunnel (Backup)...")
             with open(LOCALTUNNEL_LOG, "w") as out:
@@ -331,17 +305,50 @@ def start_tunnels() -> Dict[str, str]:
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
-            for _ in range(10):
-                time.sleep(1.0)
-                if LOCALTUNNEL_LOG.exists():
-                    lt_content = LOCALTUNNEL_LOG.read_text(errors="ignore")
-                    lt_matches = re.findall(r"https://[a-zA-Z0-9-]+\.loca\.lt", lt_content)
-                    if lt_matches:
-                        urls["localtunnel"] = lt_matches[0]
-                        log("TUNNEL", f"Localtunnel connected: {lt_matches[0]}")
-                        break
-        except Exception:
-            pass
+        except Exception as e:
+            log("WARN", f"Localtunnel launch failed: {e}")
+
+    # Poll logs for active tunnel URLs
+    log("TUNNEL", "Waiting for tunnel endpoints to establish...")
+    for _ in range(16):
+        time.sleep(1.0)
+        
+        # Pinggy extraction
+        if not urls.get("pinggy") and PINGGY_LOG.exists():
+            p_content = PINGGY_LOG.read_text(errors="ignore")
+            matches = re.findall(r"https://[a-zA-Z0-9.-]+\.pinggy\.link", p_content) or re.findall(r"https://[a-zA-Z0-9.-]+\.free\.pinggy\.link", p_content)
+            for m in matches:
+                if "dashboard" not in m and "login" not in m:
+                    urls["pinggy"] = m
+                    log("TUNNEL", f"Pinggy Tunnel connected: {m}")
+                    break
+
+        # Cloudflare extraction
+        if not urls.get("cloudflare") and CF_TUNNEL_LOG.exists():
+            cf_content = CF_TUNNEL_LOG.read_text(errors="ignore")
+            cf_matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", cf_content)
+            if cf_matches:
+                urls["cloudflare"] = cf_matches[0]
+                log("TUNNEL", f"Cloudflare Tunnel connected: {cf_matches[0]}")
+
+        # Localhost.run extraction
+        if not urls.get("localhostrun") and LHR_LOG.exists():
+            lhr_content = LHR_LOG.read_text(errors="ignore")
+            lhr_matches = re.findall(r"https://[a-zA-Z0-9-]+\.lhr\.life", lhr_content) or re.findall(r"https://[a-zA-Z0-9-]+\.localhost\.run", lhr_content)
+            if lhr_matches:
+                urls["localhostrun"] = lhr_matches[0]
+                log("TUNNEL", f"Localhost.run connected: {lhr_matches[0]}")
+
+        # Localtunnel extraction
+        if not urls.get("localtunnel") and LOCALTUNNEL_LOG.exists():
+            lt_content = LOCALTUNNEL_LOG.read_text(errors="ignore")
+            lt_matches = re.findall(r"https://[a-zA-Z0-9-]+\.loca\.lt", lt_content)
+            if lt_matches:
+                urls["localtunnel"] = lt_matches[0]
+                log("TUNNEL", f"Localtunnel connected: {lt_matches[0]}")
+
+        if len(urls) >= 2:
+            break
 
     # Retrieve public IP for Localtunnel bypass if needed
     try:
@@ -351,8 +358,8 @@ def start_tunnels() -> Dict[str, str]:
     except Exception:
         urls["public_ip"] = "N/A"
 
-    if not urls:
-        error_exit("Tunnel Service", "All tunnel providers failed to initialize.", PINGGY_LOG)
+    if not urls or len([k for k in urls if k != "public_ip"]) == 0:
+        error_exit("Tunnel Service", "All tunnel providers failed to return a live URL.", CF_TUNNEL_LOG)
     return urls
 
 def print_banner(urls: Dict[str, str], use_cuda: bool):
@@ -375,13 +382,13 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
     
     # Print high-priority active URLs
     if pinggy_url:
-        print(f"\n  👉 FAST DIRECT LINK (Pinggy SSL)    : \033[1;32m{pinggy_url}\033[0m")
+        print(f"\n  👉 PRIMARY DIRECT LINK (Pinggy SSL)  : \033[1;32m{pinggy_url}\033[0m")
     if cf_url:
-        print(f"  👉 ALTERNATIVE LINK (Cloudflare)    : \033[1;36m{cf_url}\033[0m")
+        print(f"  👉 ALTERNATIVE LINK (Cloudflare)     : \033[1;36m{cf_url}\033[0m")
     if lhr_url:
-        print(f"  👉 MIRROR LINK (Localhost.run)      : \033[1;35m{lhr_url}\033[0m")
+        print(f"  👉 MIRROR LINK (Localhost.run)       : \033[1;35m{lhr_url}\033[0m")
     if lt_url:
-        print(f"  👉 BACKUP LINK (Localtunnel)        : \033[1;33m{lt_url}\033[0m")
+        print(f"  👉 BACKUP LINK (Localtunnel)         : \033[1;33m{lt_url}\033[0m")
         if public_ip != "N/A":
             print(f"     ↳ (If Localtunnel asks for password, enter: \033[1m{public_ip}\033[0m)")
 
@@ -401,10 +408,13 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
     print("═" * 80)
     print("  [System Watchdog Active] Keeping all services online. Press Ctrl+C to stop.\n", flush=True)
 
-    # Google Colab native popup
+    # Google Colab native interactive iframe & window
     try:
         import google.colab.output
-        google.colab.output.serve_kernel_port_as_window(8000)
+        try:
+            google.colab.output.serve_kernel_port_as_iframe(8000, height=850)
+        except Exception:
+            google.colab.output.serve_kernel_port_as_window(8000)
     except Exception:
         pass
 

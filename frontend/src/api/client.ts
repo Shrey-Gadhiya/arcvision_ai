@@ -31,10 +31,7 @@ export const getMediaUrl = (path?: string): string => {
 
 export const apiClient = axios.create({
   baseURL: API_V1,
-  timeout: 15000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  timeout: 60000,
 });
 
 apiClient.interceptors.request.use((config) => {
@@ -42,8 +39,14 @@ apiClient.interceptors.request.use((config) => {
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  if (config.data instanceof FormData && config.headers) {
-    delete config.headers['Content-Type'];
+  if (config.data instanceof FormData) {
+    if (config.headers && typeof (config.headers as any).delete === 'function') {
+      (config.headers as any).delete('Content-Type');
+      (config.headers as any).delete('content-type');
+    } else if (config.headers) {
+      delete config.headers['Content-Type'];
+      delete config.headers['content-type'];
+    }
   }
   return config;
 });

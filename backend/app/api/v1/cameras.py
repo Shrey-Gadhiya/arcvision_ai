@@ -1,5 +1,7 @@
+import re
 import json
 import time
+import shutil
 from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
@@ -199,24 +201,30 @@ async def upload_camera_video(
 ):
     """
     Uploads an MP4 / video file to serve as a custom CCTV camera feed source.
+    Streams directly to disk to handle large video files efficiently.
     """
-    ext = Path(file.filename or "video.mp4").suffix.lower()
-    if ext not in [".mp4", ".mkv", ".avi", ".mov", ".webm"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid video format. Supported formats: .mp4, .mkv, .avi, .mov, .webm"
-        )
+    raw_name = file.filename or "video.mp4"
+    ext = Path(raw_name).suffix.lower()
+    allowed_exts = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".3gp", ".wmv", ".mpeg", ".mpg"]
+    if ext not in allowed_exts:
+        # Default to .mp4 if extension is missing or unusual
+        ext = ".mp4"
 
+    clean_basename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(raw_name).stem)[:50]
     timestamp = int(time.time())
-    safe_name = f"video_{timestamp}_{file.filename.replace(' ', '_')}"
-    target_path = settings.UPLOADS_DIR / safe_name
+    safe_name = f"video_{timestamp}_{clean_basename}{ext}"
+    
+    uploads_dir = Path(settings.UPLOADS_DIR)
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    target_path = uploads_dir / safe_name
 
     try:
-        contents = await file.read()
-        with open(target_path, "wb") as f:
-            f.write(contents)
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write video file: {str(e)}")
+    finally:
+        await file.close()
 
     rel_path = f"data/uploads/{safe_name}"
     return {

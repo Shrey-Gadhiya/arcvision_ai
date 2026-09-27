@@ -128,6 +128,23 @@ class BasePlateOCRAdapter(ABC):
         """Extracts text and confidence from a cropped license plate image."""
         pass
 
+    def detect_and_read_from_frame(self, frame_or_crop: np.ndarray) -> Optional[Dict[str, Any]]:
+        """Extracts plate text and bounding geometry from a vehicle frame/crop."""
+        if frame_or_crop is None or frame_or_crop.size == 0:
+            return None
+        res = self.read_plate(frame_or_crop)
+        if res.raw_text and len(res.raw_text) >= 3 and res.confidence >= 0.20:
+            h, w = frame_or_crop.shape[:2]
+            return {
+                "raw_text": res.metadata.get("raw", res.raw_text),
+                "cleaned_text": res.raw_text,
+                "confidence": res.confidence,
+                "box": [0, 0, w, h],
+                "plate_crop": frame_or_crop,
+                "box_rel": [0.0, 0.0, 1.0, 1.0]
+            }
+        return None
+
     def health_check(self) -> Dict[str, Any]:
         return {
             "name": self.name,

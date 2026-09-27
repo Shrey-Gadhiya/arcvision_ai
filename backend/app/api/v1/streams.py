@@ -44,7 +44,14 @@ async def get_live_mjpeg(camera_id: int, annotated: bool = True):
 
     return StreamingResponse(
         frame_generator(camera_id, annotated=annotated),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Connection": "close"
+        }
     )
 
 @router.get("/{camera_id}/snapshot.jpg")

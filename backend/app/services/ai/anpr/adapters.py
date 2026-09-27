@@ -472,6 +472,36 @@ class CRNNPlateOCRAdapter(BasePlateOCRAdapter):
             self.latency_ms = (time.time() - t0) * 1000.0
             return OCRResult(raw_text="", confidence=0.0, status="ERROR", metadata={"error": str(e)})
 
+    def detect_and_read_from_frame(self, frame_or_crop: np.ndarray) -> Optional[Dict[str, Any]]:
+        """Multi-pass CRNN neural inference over vehicle crop ROIs."""
+        if self.status != AdapterStatus.LOADED or self.net is None or frame_or_crop is None or frame_or_crop.size == 0:
+            return None
+        h, w = frame_or_crop.shape[:2]
+        # Evaluate lower-half ROI where vehicle license plates are mounted
+        y_start = int(h * 0.35) if h > 50 else 0
+        roi = frame_or_crop[y_start:h, :]
+        if roi.size == 0:
+            roi = frame_or_crop
+            y_start = 0
+
+        res = self.read_plate(roi)
+        if not res.raw_text or len(res.raw_text) < 3 or res.confidence < 0.20:
+            # Fallback: Evaluate full vehicle crop
+            res = self.read_plate(frame_or_crop)
+            y_start = 0
+
+        if res.raw_text and len(res.raw_text) >= 3 and res.confidence >= 0.20:
+            box = [0, y_start, w, h]
+            return {
+                "raw_text": res.metadata.get("raw", res.raw_text),
+                "cleaned_text": res.raw_text,
+                "confidence": res.confidence,
+                "box": box,
+                "plate_crop": roi if y_start > 0 else frame_or_crop,
+                "box_rel": [0.0, float(y_start) / max(1, h), 1.0, 1.0]
+            }
+        return None
+
 class UnavailablePlateDetectorAdapter(BasePlateDetectorAdapter):
     """Explicit adapter indicating plate detection model is not configured."""
     def __init__(self, name: str = "unavailable_plate_detector"):

@@ -132,9 +132,9 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         detections: List[Detection] = []
 
         try:
+            model_names = getattr(self.model, "names", {})
             predict_kwargs = {
                 "conf": confidence_threshold,
-                "classes": list(SURVEILLANCE_CLASSES.keys()),
                 "imgsz": 640,
                 "agnostic_nms": True,
                 "iou": 0.45,
@@ -162,7 +162,7 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                     if (x2 - x1) * w < 8 or (y2 - y1) * h < 8:
                         continue
 
-                    class_name = SURVEILLANCE_CLASSES.get(cls_id, "unknown")
+                    class_name = model_names.get(cls_id, SURVEILLANCE_CLASSES.get(cls_id, "object")).lower()
                     detections.append(Detection(
                         class_name=class_name,
                         confidence=conf,

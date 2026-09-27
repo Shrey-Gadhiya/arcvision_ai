@@ -121,15 +121,21 @@ def check_system_tools():
         except Exception as e:
             log("WARN", f"System package check note: {e}")
 
-        # Check cloudflared
-        if not shutil.which("cloudflared"):
-            log("ENV", "Installing cloudflared binary...")
+        # Check cloudflared standalone binary
+        cf_bin = shutil.which("cloudflared") or ("/tmp/cloudflared" if os.path.exists("/tmp/cloudflared") else None)
+        if not cf_bin:
+            log("ENV", "Installing standalone cloudflared binary...")
             try:
-                deb_path = "/tmp/cloudflared-linux-amd64.deb"
-                subprocess.run(["wget", "-q", "-nc", "-O", deb_path, "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"], check=True)
-                subprocess.run(["dpkg", "-i", deb_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cf_target = "/tmp/cloudflared"
+                subprocess.run(["wget", "-q", "-nc", "-O", cf_target, "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"], check=True)
+                os.chmod(cf_target, 0o755)
+                try:
+                    shutil.copy(cf_target, "/usr/local/bin/cloudflared")
+                    os.chmod("/usr/local/bin/cloudflared", 0o755)
+                except Exception:
+                    pass
             except Exception as e:
-                log("WARN", f"Could not auto-install cloudflared deb: {e}")
+                log("WARN", f"Could not download cloudflared binary: {e}")
 
 def check_python_dependencies():
     log("PYTHON", "Verifying Python dependencies...")
@@ -274,7 +280,7 @@ def start_tunnels() -> Dict[str, str]:
     urls = {}
 
     ssh_bin = shutil.which("ssh")
-    cf_bin = shutil.which("cloudflared")
+    cf_bin = shutil.which("cloudflared") or ("/usr/local/bin/cloudflared" if os.path.exists("/usr/local/bin/cloudflared") else None) or ("/tmp/cloudflared" if os.path.exists("/tmp/cloudflared") else None)
     npm_cmd = shutil.which("npx") or shutil.which("npm")
 
     # 1. Start Pinggy Tunnel (Port 443 SSH SSL)

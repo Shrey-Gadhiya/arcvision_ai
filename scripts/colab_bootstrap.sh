@@ -43,14 +43,12 @@ fi
 COMMIT_HASH=$(git rev-parse --short HEAD)
 echo "[ARC VISION] Repository updated to commit: $COMMIT_HASH"
 
-# 2. Ensure cloudflared is installed if in Debian/Ubuntu environment
-if ! command -v cloudflared &> /dev/null; then
-    echo "[ARC VISION] Installing cloudflared binary for Linux x86_64..."
-    wget -q -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -O /tmp/cloudflared.deb || true
-    if [ -f /tmp/cloudflared.deb ]; then
-        dpkg -i /tmp/cloudflared.deb > /dev/null 2>&1 || true
-        rm -f /tmp/cloudflared.deb
-    fi
+# 2. Ensure cloudflared is installed
+if ! command -v cloudflared &> /dev/null && [ ! -f "/tmp/cloudflared" ]; then
+    echo "[ARC VISION] Downloading standalone cloudflared binary for Linux x86_64..."
+    wget -q -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared || true
+    chmod +x /tmp/cloudflared 2>/dev/null || true
+    cp /tmp/cloudflared /usr/local/bin/cloudflared 2>/dev/null || true
 fi
 
 # 3. Check GPU and ensure CUDA-enabled PyTorch is present

@@ -267,13 +267,13 @@ def start_tunnels() -> Dict[str, str]:
         except Exception as e:
             log("WARN", f"Pinggy launch failed: {e}")
 
-    # 2. Start Cloudflare Tunnel (HTTP2 protocol IPv4)
+    # 2. Start Cloudflare Tunnel
     if cf_bin:
         try:
-            log("TUNNEL", "Starting Cloudflare Tunnel (HTTP/2 IPv4 mode)...")
+            log("TUNNEL", "Starting Cloudflare Tunnel...")
             with open(CF_TUNNEL_LOG, "w") as out:
                 cf_tunnel_process = subprocess.Popen(
-                    [cf_bin, "tunnel", "--protocol", "http2", "--edge-ip-version", "4", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
+                    [cf_bin, "tunnel", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )

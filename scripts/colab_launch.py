@@ -221,12 +221,12 @@ def start_tunnels() -> Dict[str, str]:
     urls = {}
     
     # 1. Start Cloudflare Tunnel (Primary)
-    log("TUNNEL", "Starting Cloudflare Tunnel (Primary) on port 8000...")
+    log("TUNNEL", "Starting Cloudflare Tunnel (Primary) on 127.0.0.1:8000...")
     cf_bin = shutil.which("cloudflared")
     if cf_bin:
         with open(TUNNEL_LOG, "w") as out:
             tunnel_process = subprocess.Popen(
-                [cf_bin, "tunnel", "--url", "http://localhost:8000"],
+                [cf_bin, "tunnel", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
                 stdout=out,
                 stderr=subprocess.STDOUT
             )
@@ -247,10 +247,10 @@ def start_tunnels() -> Dict[str, str]:
     npm_cmd = shutil.which("npx") or shutil.which("npm")
     if npm_cmd:
         try:
-            log("TUNNEL", "Starting Localtunnel (Backup) on port 8000...")
+            log("TUNNEL", "Starting Localtunnel (Backup) on 127.0.0.1:8000...")
             with open(LOCALTUNNEL_LOG, "w") as out:
                 localtunnel_process = subprocess.Popen(
-                    ["npx", "-y", "localtunnel", "--port", "8000"],
+                    ["npx", "-y", "localtunnel", "--port", "8000", "--local-host", "127.0.0.1"],
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
@@ -266,6 +266,14 @@ def start_tunnels() -> Dict[str, str]:
         except Exception:
             pass
 
+    # Retrieve public IP for Localtunnel bypass prompt
+    try:
+        req = urllib.request.Request("https://ipv4.icanhazip.com", headers={"User-Agent": "curl/7.68.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            urls["public_ip"] = resp.read().decode("utf-8").strip()
+    except Exception:
+        urls["public_ip"] = "N/A"
+
     if not urls:
         error_exit("Tunnel Service", "Failed to obtain public URL from tunnel providers.", TUNNEL_LOG)
     return urls
@@ -279,15 +287,16 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
     gpu_status = "NVIDIA CUDA ACCELERATED" if use_cuda else "CPU FALLBACK"
     primary_url = urls.get("cloudflare") or list(urls.values())[0]
     backup_url = urls.get("localtunnel")
+    public_ip = urls.get("public_ip", "N/A")
 
     print("\n" + "═" * 78)
     print("  🚀  ARC VISION — BORDER SURVEILLANCE PLATFORM IS LIVE  🚀  ")
     print("═" * 78)
-    print(f"\n  👉 PRIMARY URL   : \033[1;32m{primary_url}\033[0m")
+    print(f"\n  👉 PRIMARY URL (Cloudflare) : \033[1;32m{primary_url}\033[0m")
     if backup_url:
-        print(f"  👉 BACKUP URL    : \033[1;36m{backup_url}\033[0m")
-    print(f"\n  ℹ️  Tip: If the primary URL shows 'DNS_PROBE_POSSIBLE', please wait 15s")
-    print(f"     for Cloudflare global DNS propagation and refresh your browser tab.")
+        print(f"  👉 BACKUP URL (Localtunnel) : \033[1;36m{backup_url}\033[0m")
+        if public_ip and public_ip != "N/A":
+            print(f"     (If Localtunnel asks for tunnel password / IP, enter: \033[1m{public_ip}\033[0m)")
     print("─" * 78)
     print(f"  • Hardware Mode     : {gpu_status}")
     print(f"  • Primary Detector  : YOLO26m (Active)")
@@ -306,7 +315,8 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
 
     try:
         from IPython.display import display, HTML
-        backup_html = f'<div style="margin-top: 8px;"><a href="{backup_url}" target="_blank" style="color: #38bdf8; font-size: 13px;">🔗 Backup Mirror: {backup_url}</a></div>' if backup_url else ""
+        ip_hint = f' (Password/IP: <code style="color: #facc15;">{public_ip}</code>)' if public_ip != "N/A" else ""
+        backup_html = f'<div style="margin-top: 8px;"><a href="{backup_url}" target="_blank" style="color: #38bdf8; font-size: 13px;">🔗 Backup Mirror: {backup_url}</a>{ip_hint}</div>' if backup_url else ""
         display(HTML(f"""
         <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid #38bdf8; border-radius: 12px; padding: 20px; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 700px; margin: 15px 0;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">

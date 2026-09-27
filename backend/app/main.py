@@ -212,33 +212,20 @@ app.include_router(ws.router, prefix=api_v1)
 app.include_router(ws.router) # also mount /ws at root for convenience
 app.include_router(health.router) # also mount /health at root for convenience
 
-# Optional SPA Frontend Mounting if dist/ exists
+# SPA Static Files Handler for 100% reliable single-port production serving
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except Exception:
+            response = await super().get_response("index.html", scope)
+        if response.status_code == 404:
+            response = await super().get_response("index.html", scope)
+        return response
+
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if (frontend_dist / "index.html").exists():
-    if (frontend_dist / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="frontend_assets")
-
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        # Exclude API endpoints, static directories, docs, and websockets
-        if (
-            full_path.startswith("api/") or 
-            full_path.startswith("static/") or 
-            full_path.startswith("evidence/") or 
-            full_path.startswith("recordings/") or 
-            full_path.startswith("snapshots/") or 
-            full_path.startswith("uploads/") or 
-            full_path.startswith("ws") or 
-            full_path.startswith("docs") or 
-            full_path.startswith("redoc") or 
-            full_path == "openapi.json"
-        ):
-            raise HTTPException(status_code=404, detail="Endpoint not found")
-        
-        target_file = frontend_dist / full_path
-        if target_file.is_file():
-            return FileResponse(str(target_file))
-        return FileResponse(str(frontend_dist / "index.html"))
+    app.mount("/", SPAStaticFiles(directory=str(frontend_dist), html=True), name="frontend_spa")
 else:
     @app.get("/")
     async def root():

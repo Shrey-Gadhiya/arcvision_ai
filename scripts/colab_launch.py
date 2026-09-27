@@ -161,19 +161,22 @@ def init_database():
         error_exit("Database Init", f"Failed to initialize database: {e}")
 
 def build_frontend():
-    log("FRONTEND", "Checking frontend production bundle...")
-    dist_html = FRONTEND_DIR / "dist" / "index.html"
-    if not dist_html.exists():
-        log("FRONTEND", "Installing npm packages and building Vite bundle...")
-        npm_cmd = shutil.which("npm")
-        if not npm_cmd:
-            error_exit("Frontend Build", "Node.js / npm not found on system.")
+    log("FRONTEND", "Building latest frontend production bundle...")
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        error_exit("Frontend Build", "Node.js / npm not found on system.")
+    
+    node_modules = FRONTEND_DIR / "node_modules"
+    if not node_modules.exists():
+        log("FRONTEND", "Installing npm packages...")
         res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
         if res1.returncode != 0:
             error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
-        res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
-        if res2.returncode != 0:
-            error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
+    
+    log("FRONTEND", "Compiling production assets with Vite...")
+    res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
+    if res2.returncode != 0:
+        error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
     log("FRONTEND", "Frontend production build ready.")
 
 def start_backend_service(use_cuda: bool):
@@ -211,46 +214,16 @@ def start_backend_service(use_cuda: bool):
         error_exit("FastAPI Backend", "Backend failed health check within 35 seconds.", BACKEND_LOG)
     log("BACKEND", "FastAPI backend is READY (HTTP 200).")
 
-def start_frontend_service():
-    global frontend_process
-    log("FRONTEND", "Launching Vite preview server on 0.0.0.0:5173...")
-    npm_cmd = shutil.which("npm") or "npm"
-    with open(FRONTEND_LOG, "w") as out:
-        frontend_process = subprocess.Popen(
-            [npm_cmd, "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"],
-            cwd=str(FRONTEND_DIR),
-            stdout=out,
-            stderr=subprocess.STDOUT
-        )
-
-    ready = False
-    for _ in range(25):
-        time.sleep(1.0)
-        try:
-            req = urllib.request.Request("http://127.0.0.1:5173")
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                if resp.status in [200, 304]:
-                    ready = True
-                    break
-        except Exception:
-            pass
-        if frontend_process.poll() is not None:
-            break
-
-    if not ready:
-        error_exit("React Frontend", "Frontend failed readiness check on port 5173.", FRONTEND_LOG)
-    log("FRONTEND", "Vite frontend is READY (HTTP 200).")
-
 def start_cloudflare_tunnel() -> str:
     global tunnel_process
-    log("TUNNEL", "Starting Cloudflare Tunnel to expose port 5173...")
+    log("TUNNEL", "Starting Cloudflare Tunnel to expose ARC VISION on port 8000...")
     cf_bin = shutil.which("cloudflared")
     if not cf_bin:
         error_exit("Cloudflare Tunnel", "cloudflared executable not found.")
 
     with open(TUNNEL_LOG, "w") as out:
         tunnel_process = subprocess.Popen(
-            [cf_bin, "tunnel", "--url", "http://localhost:5173"],
+            [cf_bin, "tunnel", "--url", "http://localhost:8000"],
             stdout=out,
             stderr=subprocess.STDOUT
         )
@@ -258,6 +231,14 @@ def start_cloudflare_tunnel() -> str:
     public_url = None
     for _ in range(30):
         time.sleep(1.0)
+        if TUNNEL_LOG.exists():
+            content = TUNNEL_LOG.read_text(errors="ignore")
+            matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
+            if matches:
+                public_url = matches[0]
+                break
+        if tunnel_process.poll() is not None:
+            break
         if TUNNEL_LOG.exists():
             content = TUNNEL_LOG.read_text(errors="ignore")
             matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
@@ -332,10 +313,6 @@ def run_watchdog():
         if backend_process and backend_process.poll() is not None:
             log("WATCHDOG", "Backend crashed! Relaunching...")
             start_backend_service(check_gpu())
-        # Check frontend
-        if frontend_process and frontend_process.poll() is not None:
-            log("WATCHDOG", "Frontend crashed! Relaunching...")
-            start_frontend_service()
         # Check tunnel
         if tunnel_process and tunnel_process.poll() is not None:
             log("WATCHDOG", "Cloudflare tunnel disconnected! Relaunching...")
@@ -353,7 +330,6 @@ def main():
     init_database()
     build_frontend()
     start_backend_service(use_cuda)
-    start_frontend_service()
     public_url = start_cloudflare_tunnel()
     print_banner(public_url, use_cuda)
     run_watchdog()

@@ -208,13 +208,43 @@ app.include_router(ptz.router, prefix=api_v1)
 app.include_router(demo.router, prefix=api_v1)
 app.include_router(ws.router, prefix=api_v1)
 app.include_router(ws.router) # also mount /ws at root for convenience
+app.include_router(health.router) # also mount /health at root for convenience
 
-@app.get("/")
-async def root():
-    return {
-        "system": "ARC VISION Tactical AI Surveillance Platform",
-        "mission": "SIH26187: Border Surveillance using existing CCTV Infrastructure (MHA/SSB)",
-        "status": "OPERATIONAL",
-        "version": settings.VERSION,
-        "docs_url": "/docs"
-    }
+# Optional SPA Frontend Mounting if dist/ exists
+from fastapi.responses import FileResponse
+frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if (frontend_dist / "index.html").exists():
+    if (frontend_dist / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="frontend_assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Exclude API endpoints, static directories, docs, and websockets
+        if (
+            full_path.startswith("api/") or 
+            full_path.startswith("static/") or 
+            full_path.startswith("evidence/") or 
+            full_path.startswith("recordings/") or 
+            full_path.startswith("snapshots/") or 
+            full_path.startswith("uploads/") or 
+            full_path.startswith("ws") or 
+            full_path.startswith("docs") or 
+            full_path.startswith("redoc") or 
+            full_path == "openapi.json"
+        ):
+            raise HTTPException(status_code=404, detail="Endpoint not found")
+        
+        target_file = frontend_dist / full_path
+        if target_file.is_file():
+            return FileResponse(str(target_file))
+        return FileResponse(str(frontend_dist / "index.html"))
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "system": "ARC VISION Tactical AI Surveillance Platform",
+            "mission": "SIH26187: Border Surveillance using existing CCTV Infrastructure (MHA/SSB)",
+            "status": "OPERATIONAL",
+            "version": settings.VERSION,
+            "docs_url": "/docs"
+        }

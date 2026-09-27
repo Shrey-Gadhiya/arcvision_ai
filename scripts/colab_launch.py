@@ -214,58 +214,81 @@ def start_backend_service(use_cuda: bool):
         error_exit("FastAPI Backend", "Backend failed health check within 35 seconds.", BACKEND_LOG)
     log("BACKEND", "FastAPI backend is READY (HTTP 200).")
 
-def start_cloudflare_tunnel() -> str:
-    global tunnel_process
-    log("TUNNEL", "Starting Cloudflare Tunnel to expose ARC VISION on port 8000...")
+LOCALTUNNEL_LOG = LOG_DIR / "localtunnel.log"
+localtunnel_process = None
+
+def start_tunnels() -> Dict[str, str]:
+    global tunnel_process, localtunnel_process
+    urls = {}
+    
+    # 1. Start Cloudflare Tunnel (Primary)
+    log("TUNNEL", "Starting Cloudflare Tunnel (Primary) on port 8000...")
     cf_bin = shutil.which("cloudflared")
-    if not cf_bin:
-        error_exit("Cloudflare Tunnel", "cloudflared executable not found.")
+    if cf_bin:
+        with open(TUNNEL_LOG, "w") as out:
+            tunnel_process = subprocess.Popen(
+                [cf_bin, "tunnel", "--url", "http://localhost:8000"],
+                stdout=out,
+                stderr=subprocess.STDOUT
+            )
 
-    with open(TUNNEL_LOG, "w") as out:
-        tunnel_process = subprocess.Popen(
-            [cf_bin, "tunnel", "--url", "http://localhost:8000"],
-            stdout=out,
-            stderr=subprocess.STDOUT
-        )
-
-    public_url = None
-    for _ in range(30):
-        time.sleep(1.0)
-        if TUNNEL_LOG.exists():
-            content = TUNNEL_LOG.read_text(errors="ignore")
-            matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
-            if matches:
-                public_url = matches[0]
+        for _ in range(25):
+            time.sleep(1.0)
+            if TUNNEL_LOG.exists():
+                content = TUNNEL_LOG.read_text(errors="ignore")
+                matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
+                if matches:
+                    urls["cloudflare"] = matches[0]
+                    log("TUNNEL", f"Cloudflare Tunnel connected: {matches[0]}")
+                    break
+            if tunnel_process.poll() is not None:
                 break
-        if tunnel_process.poll() is not None:
-            break
-        if TUNNEL_LOG.exists():
-            content = TUNNEL_LOG.read_text(errors="ignore")
-            matches = re.findall(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
-            if matches:
-                public_url = matches[0]
-                break
-        if tunnel_process.poll() is not None:
-            break
 
-    if not public_url:
-        error_exit("Cloudflare Tunnel", "Failed to extract public URL from cloudflared.", TUNNEL_LOG)
-    log("TUNNEL", f"Cloudflare Tunnel connected: {public_url}")
-    return public_url
+    # 2. Start Localtunnel / Secondary Backup
+    npm_cmd = shutil.which("npx") or shutil.which("npm")
+    if npm_cmd:
+        try:
+            log("TUNNEL", "Starting Localtunnel (Backup) on port 8000...")
+            with open(LOCALTUNNEL_LOG, "w") as out:
+                localtunnel_process = subprocess.Popen(
+                    ["npx", "-y", "localtunnel", "--port", "8000"],
+                    stdout=out,
+                    stderr=subprocess.STDOUT
+                )
+            for _ in range(15):
+                time.sleep(1.0)
+                if LOCALTUNNEL_LOG.exists():
+                    lt_content = LOCALTUNNEL_LOG.read_text(errors="ignore")
+                    lt_matches = re.findall(r"https://[a-zA-Z0-9-]+\.loca\.lt", lt_content)
+                    if lt_matches:
+                        urls["localtunnel"] = lt_matches[0]
+                        log("TUNNEL", f"Localtunnel connected: {lt_matches[0]}")
+                        break
+        except Exception:
+            pass
 
-def print_banner(public_url: str, use_cuda: bool):
+    if not urls:
+        error_exit("Tunnel Service", "Failed to obtain public URL from tunnel providers.", TUNNEL_LOG)
+    return urls
+
+def print_banner(urls: Dict[str, str], use_cuda: bool):
     try:
         git_commit = subprocess.getoutput("git rev-parse --short HEAD")
     except Exception:
         git_commit = "main"
 
     gpu_status = "NVIDIA CUDA ACCELERATED" if use_cuda else "CPU FALLBACK"
+    primary_url = urls.get("cloudflare") or list(urls.values())[0]
+    backup_url = urls.get("localtunnel")
 
     print("\n" + "═" * 78)
     print("  🚀  ARC VISION — BORDER SURVEILLANCE PLATFORM IS LIVE  🚀  ")
     print("═" * 78)
-    print(f"\n  👉 PUBLIC URL : \033[1;32m{public_url}\033[0m")
-    print(f"     (Open this link in your browser to access the full UI & AI pipeline)\n")
+    print(f"\n  👉 PRIMARY URL   : \033[1;32m{primary_url}\033[0m")
+    if backup_url:
+        print(f"  👉 BACKUP URL    : \033[1;36m{backup_url}\033[0m")
+    print(f"\n  ℹ️  Tip: If the primary URL shows 'DNS_PROBE_POSSIBLE', please wait 15s")
+    print(f"     for Cloudflare global DNS propagation and refresh your browser tab.")
     print("─" * 78)
     print(f"  • Hardware Mode     : {gpu_status}")
     print(f"  • Primary Detector  : YOLO26m (Active)")
@@ -284,20 +307,22 @@ def print_banner(public_url: str, use_cuda: bool):
 
     try:
         from IPython.display import display, HTML
+        backup_html = f'<div style="margin-top: 8px;"><a href="{backup_url}" target="_blank" style="color: #38bdf8; font-size: 13px;">🔗 Backup Mirror: {backup_url}</a></div>' if backup_url else ""
         display(HTML(f"""
         <div style="background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid #38bdf8; border-radius: 12px; padding: 20px; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 700px; margin: 15px 0;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                 <span style="font-size: 24px;">🛰️</span>
                 <h2 style="color: #38bdf8; margin: 0; font-size: 20px; font-weight: 700;">ARC VISION — BORDER SURVEILLANCE CORE</h2>
             </div>
-            <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 16px;">FastAPI Backend, React Frontend, and Cloudflare Tunnel are active and connected.</p>
-            <div style="background: #0284c7; padding: 12px 20px; border-radius: 8px; display: inline-block; margin-bottom: 16px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
-                <a href="{public_url}" target="_blank" style="color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; display: flex; align-items: center; gap: 8px;">
-                    <span>🚀 OPEN ARC VISION INTERFACE:</span>
-                    <span style="text-decoration: underline;">{public_url}</span>
+            <p style="color: #cbd5e1; font-size: 14px; margin-bottom: 14px;">FastAPI Backend, React Frontend, and Unified Tunnel are active.</p>
+            <div style="background: #0284c7; padding: 12px 20px; border-radius: 8px; display: inline-block; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
+                <a href="{primary_url}" target="_blank" style="color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; display: flex; align-items: center; gap: 8px;">
+                    <span>🚀 OPEN ARC VISION (PRIMARY):</span>
+                    <span style="text-decoration: underline;">{primary_url}</span>
                 </a>
             </div>
-            <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px 14px; color: #94a3b8; font-size: 13px; line-height: 1.6;">
+            {backup_html}
+            <div style="background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px 14px; color: #94a3b8; font-size: 13px; line-height: 1.6; margin-top: 12px;">
                 <div>🔑 <b>Login:</b> <code style="color: #38bdf8;">admin</code> / <code style="color: #38bdf8;">admin123</code></div>
                 <div>⚡ <b>AI Models:</b> YOLO26m ({gpu_status}) • YuNet • SFace • CRNN OCR</div>
             </div>
@@ -315,9 +340,10 @@ def run_watchdog():
             start_backend_service(check_gpu())
         # Check tunnel
         if tunnel_process and tunnel_process.poll() is not None:
-            log("WATCHDOG", "Cloudflare tunnel disconnected! Relaunching...")
-            new_url = start_cloudflare_tunnel()
-            print(f"\n  👉 NEW PUBLIC URL : \033[1;32{new_url}\033[0m\n", flush=True)
+            log("WATCHDOG", "Tunnel disconnected! Relaunching...")
+            new_urls = start_tunnels()
+            p_url = new_urls.get("cloudflare") or list(new_urls.values())[0]
+            print(f"\n  👉 NEW PUBLIC URL : \033[1;32{p_url}\033[0m\n", flush=True)
 
 def main():
     print("\n" + "=" * 78)
@@ -330,8 +356,8 @@ def main():
     init_database()
     build_frontend()
     start_backend_service(use_cuda)
-    public_url = start_cloudflare_tunnel()
-    print_banner(public_url, use_cuda)
+    urls = start_tunnels()
+    print_banner(urls, use_cuda)
     run_watchdog()
 
 if __name__ == "__main__":

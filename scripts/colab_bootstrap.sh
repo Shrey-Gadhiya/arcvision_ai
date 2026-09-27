@@ -9,7 +9,12 @@ set -e
 
 REPO_URL="${REPO_URL:-https://github.com/VG31OP/byrehasira-arcvision.git}"
 BRANCH="${BRANCH:-main}"
-REPO_DIR="${REPO_DIR:-/content/ARCVISION}"
+
+if [ -d "/kaggle/working" ]; then
+    REPO_DIR="${REPO_DIR:-/kaggle/working/ARCVISION}"
+else
+    REPO_DIR="${REPO_DIR:-/content/ARCVISION}"
+fi
 
 echo "======================================================================"
 echo "  🛰️ ARC VISION — ONE-COMMAND BOOTSTRAPPER"
@@ -19,6 +24,9 @@ echo "Target Branch     : $BRANCH"
 echo "Target Directory  : $REPO_DIR"
 echo "======================================================================"
 
+# Clean any temporary stale paths
+rm -rf /tmp/ARCVISION_REPO /tmp/arcvision_logs 2>/dev/null || true
+
 # 1. Clone or Update Repository
 if [ ! -d "$REPO_DIR" ]; then
     echo "[ARC VISION] Cloning repository into $REPO_DIR..."
@@ -27,6 +35,7 @@ if [ ! -d "$REPO_DIR" ]; then
 else
     echo "[ARC VISION] Updating existing repository at $REPO_DIR..."
     cd "$REPO_DIR"
+    git remote set-url origin "$REPO_URL" 2>/dev/null || true
     git fetch origin "$BRANCH" --quiet
     git reset --hard "origin/$BRANCH" --quiet
 fi

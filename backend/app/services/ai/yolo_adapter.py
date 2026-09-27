@@ -132,18 +132,16 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
         detections: List[Detection] = []
 
         try:
-            use_half = (self.precision == "fp16" and str(self.device).startswith("cuda"))
-            results = self.model(
-                frame,
-                conf=confidence_threshold,
-                classes=list(SURVEILLANCE_CLASSES.keys()),
-                imgsz=640,
-                agnostic_nms=True,
-                iou=0.45,
-                device=self.device,
-                half=use_half,
-                verbose=False
-            )
+            predict_kwargs = {
+                "conf": confidence_threshold,
+                "classes": list(SURVEILLANCE_CLASSES.keys()),
+                "imgsz": 640,
+                "agnostic_nms": True,
+                "iou": 0.45,
+                "device": self.device,
+                "verbose": False
+            }
+            results = self.model(frame, **predict_kwargs)
 
             for r in results:
                 boxes = r.boxes

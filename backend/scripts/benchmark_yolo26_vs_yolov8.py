@@ -29,7 +29,7 @@ def benchmark_model(model_path: Path, name: str, device: str = "cuda:0", precisi
         
         # Warmup
         for _ in range(warmup):
-            _ = model(img, device=device, half=use_half, verbose=False)
+            _ = model(img, device=device, verbose=False)
         if str(device).startswith("cuda"):
             torch.cuda.synchronize()
             
@@ -38,7 +38,7 @@ def benchmark_model(model_path: Path, name: str, device: str = "cuda:0", precisi
             if str(device).startswith("cuda"):
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
-            _ = model(img, device=device, half=use_half, verbose=False)
+            _ = model(img, device=device, verbose=False)
             if str(device).startswith("cuda"):
                 torch.cuda.synchronize()
             t1 = time.perf_counter()

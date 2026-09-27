@@ -207,6 +207,48 @@ async def restart_camera(camera_id: int, db: AsyncSession = Depends(get_db)):
     )
     return {"status": "RESTARTED", "camera_id": camera_id}
 
+@router.post("/fetch-video-url")
+async def fetch_video_from_url(request: Request):
+    """
+    Directly downloads a video from a remote URL onto the high-speed cloud host (10 Gbps),
+    bypassing slow local upload tunnels in ~1-2 seconds.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    
+    url = (data.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid video URL. Must start with http:// or https://")
+
+    try:
+        import urllib.request
+        timestamp = int(time.time())
+        clean_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(url.split("?")[0]).name)[:40]
+        if not clean_name.lower().endswith((".mp4", ".mkv", ".avi", ".mov", ".webm")):
+            clean_name += ".mp4"
+        
+        safe_name = f"cloud_{timestamp}_{clean_name}"
+        uploads_dir = Path(settings.UPLOADS_DIR)
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        target_path = uploads_dir / safe_name
+
+        req = urllib.request.Request(url, headers={"User-Agent": "ARC-VISION-NVR/2.0"})
+        with urllib.request.urlopen(req, timeout=45) as resp, open(target_path, "wb") as out:
+            shutil.copyfileobj(resp, out, length=1024 * 1024)
+
+        rel_path = f"data/uploads/{safe_name}"
+        return {
+            "status": "SUCCESS",
+            "filename": safe_name,
+            "file_path": str(target_path),
+            "relative_path": rel_path,
+            "url": f"/uploads/{safe_name}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download video from URL: {str(e)}")
+
 @router.post("/upload-video")
 async def upload_camera_video(
     request: Request,
@@ -216,7 +258,7 @@ async def upload_camera_video(
 ):
     """
     Uploads an MP4 / video file to serve as a custom CCTV camera feed source.
-    Streams directly to disk to handle large video files efficiently.
+    Streams directly to disk with 2MB chunk buffer for high-speed uploads.
     """
     actual_file = file or video or upload
     if actual_file is None:
@@ -275,12 +317,12 @@ async def upload_camera_video(
     try:
         with open(target_path, "wb") as buffer:
             if hasattr(actual_file, "file") and actual_file.file:
-                shutil.copyfileobj(actual_file.file, buffer)
+                shutil.copyfileobj(actual_file.file, buffer, length=2 * 1024 * 1024)
             elif hasattr(actual_file, "read"):
-                chunk = await actual_file.read(1024 * 1024)
+                chunk = await actual_file.read(2 * 1024 * 1024)
                 while chunk:
                     buffer.write(chunk)
-                    chunk = await actual_file.read(1024 * 1024)
+                    chunk = await actual_file.read(2 * 1024 * 1024)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write video file: {str(e)}")
     finally:

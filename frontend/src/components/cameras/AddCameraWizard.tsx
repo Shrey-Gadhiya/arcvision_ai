@@ -29,50 +29,89 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadStatusText, setUploadStatusText] = useState<string>('');
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [remoteUrlInput, setRemoteUrlInput] = useState<string>('');
+  const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
-    try {
-      const data = new FormData();
-      data.append('file', file, file.name);
-      
-      const token = localStorage.getItem('arc_token');
-      const uploadUrl = `${API_V1}/cameras/upload-video`;
+    setUploadProgress(0);
+    setUploadStatusText(`Uploading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
 
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-        body: data,
-      });
+    const token = localStorage.getItem('arc_token');
+    const uploadUrl = `${API_V1}/cameras/upload-video`;
+    const formDataUpload = new FormData();
+    formDataUpload.append('file', file, file.name);
 
-      if (!response.ok) {
-        let errMsg = `Upload failed with HTTP ${response.status}`;
-        try {
-          const errJson = await response.json();
-          if (errJson.detail) errMsg = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
-        } catch (_) {}
-        throw new Error(errMsg);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', uploadUrl, true);
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        setUploadProgress(percent);
+        setUploadStatusText(`Uploading: ${percent}% (${(event.loaded / (1024 * 1024)).toFixed(1)} / ${(event.total / (1024 * 1024)).toFixed(1)} MB)`);
       }
+    };
 
-      const resData = await response.json();
-      const path = resData.file_path || resData.relative_path || resData.filename;
+    xhr.onload = () => {
+      setIsUploading(false);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resData = JSON.parse(xhr.responseText);
+          const path = resData.file_path || resData.relative_path || resData.filename;
+          setFormData((prev) => ({
+            ...prev,
+            detect_stream_url: path,
+            rtsp_url: path,
+            record_stream_url: path
+          }));
+          setUploadedFileName(file.name);
+          setUploadStatusText(`Upload complete: ${file.name}`);
+        } catch (err) {
+          alert('Failed to parse upload response.');
+        }
+      } else {
+        alert(`Upload failed with status HTTP ${xhr.status}: ${xhr.statusText}`);
+      }
+    };
+
+    xhr.onerror = () => {
+      setIsUploading(false);
+      alert('Network error during video upload. If uploading over a tunnel, try choosing a local preset or smaller video clip.');
+    };
+
+    xhr.send(formDataUpload);
+  };
+
+  const handleFetchRemoteUrl = async () => {
+    if (!remoteUrlInput.trim()) return;
+    setIsFetchingUrl(true);
+    try {
+      const res = await apiClient.post('/cameras/fetch-video-url', { url: remoteUrlInput.trim() });
+      const path = res.data.file_path || res.data.relative_path || res.data.filename;
       setFormData((prev) => ({
         ...prev,
         detect_stream_url: path,
         rtsp_url: path,
         record_stream_url: path
       }));
-      setUploadedFileName(file.name);
+      setUploadedFileName(res.data.filename);
+      alert(`Cloud video stream fetched successfully!`);
     } catch (err: any) {
-      alert(err.message || 'Failed to upload video file.');
+      alert(err.response?.data?.detail || 'Failed to download remote video URL.');
     } finally {
-      setIsUploading(false);
+      setIsFetchingUrl(false);
     }
   };
 
@@ -309,62 +348,114 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
                       <FileVideo className="w-4 h-4 text-white" />
-                      Upload Custom MP4 Video File
+                      Ingest Video Stream Source
                     </span>
-                    <span className="text-[10px] text-zinc-400 font-mono">Formats: MP4, MKV, AVI, MOV</span>
+                    <span className="text-[10px] text-zinc-400 font-mono">Fast Cloud / MP4 Upload</span>
                   </div>
 
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="video/mp4,video/mkv,video/avi,video/quicktime,video/webm"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
+                  {/* Method A: Local MP4 File Upload with Real-Time Progress */}
+                  <div className="space-y-2">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      accept="video/mp4,video/mkv,video/avi,video/quicktime,video/webm"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
 
-                  <div className="flex items-center gap-3">
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="sm"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploading}
-                      className="flex items-center gap-1.5"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {isUploading ? 'Uploading Video...' : 'Select MP4 File to Upload'}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="flex items-center gap-1.5"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        {isUploading ? 'Uploading Video...' : 'Select MP4 from Computer'}
+                      </Button>
 
-                    {uploadedFileName && (
-                      <span className="text-white text-xs flex items-center gap-1 font-mono truncate">
-                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-white" />
-                        {uploadedFileName}
-                      </span>
+                      {uploadedFileName && (
+                        <span className="text-white text-xs flex items-center gap-1 font-mono truncate">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-white" />
+                          {uploadedFileName}
+                        </span>
+                      )}
+                    </div>
+
+                    {isUploading && (
+                      <div className="p-2.5 rounded bg-black border border-zinc-800 space-y-1.5 animate-pulse">
+                        <div className="flex justify-between text-[11px] text-zinc-300">
+                          <span>{uploadStatusText}</span>
+                          <span className="font-mono text-white font-bold">{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
+                          <div
+                            className="bg-white h-2 rounded-full transition-all duration-200"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
                     )}
                   </div>
 
-                  <div className="pt-2 border-t border-zinc-800 flex items-center gap-2 text-[11px] text-zinc-400">
-                    <span>Or select local preset:</span>
-                    <select
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val) {
-                          setFormData((prev) => ({
-                            ...prev,
-                            detect_stream_url: val,
-                            rtsp_url: val,
-                            record_stream_url: val
-                          }));
-                          setUploadedFileName(val);
-                        }
-                      }}
-                      className="bg-black border border-zinc-800 text-zinc-200 text-xs rounded px-2 py-1"
-                    >
-                      <option value="">-- Choose Local Demo Video --</option>
-                      <option value="sample.mp4">sample.mp4 (Primary Camera Feed)</option>
-                      <option value="data/demos/night_perimeter_breach.mp4">night_perimeter_breach.mp4</option>
-                      <option value="data/demos/checkpoint_anpr_vehicle.mp4">checkpoint_anpr_vehicle.mp4</option>
-                    </select>
+                  {/* Method B: Direct Remote MP4 URL (Instant Server-Side Cloud Download) */}
+                  <div className="pt-2 border-t border-zinc-800 space-y-1.5">
+                    <label className="block text-[11px] text-zinc-300 font-medium">
+                      Or Paste Direct MP4 / Video URL (Instant 1-Second Cloud Ingestion):
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        placeholder="https://example.com/stream.mp4 or raw video link"
+                        value={remoteUrlInput}
+                        onChange={(e) => setRemoteUrlInput(e.target.value)}
+                        className="flex-1 px-3 py-1.5 bg-black border border-zinc-800 rounded text-white font-mono text-[11px] focus:border-white focus:outline-none placeholder:text-zinc-600"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        onClick={handleFetchRemoteUrl}
+                        disabled={isFetchingUrl || !remoteUrlInput.trim()}
+                      >
+                        {isFetchingUrl ? 'Fetching...' : 'Fetch URL'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Method C: Instant Tactical Demo Preset */}
+                  <div className="pt-2 border-t border-zinc-800 space-y-1.5">
+                    <span className="text-[11px] text-zinc-400 font-medium">Instant One-Click Demo Presets (Zero Upload Time):</span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'sample.mp4', label: 'Primary Multi-Object Feed' },
+                        { id: 'data/demos/night_perimeter_breach.mp4', label: 'Night Vision Perimeter' },
+                        { id: 'data/demos/checkpoint_anpr_vehicle.mp4', label: 'ANPR Checkpost Feed' }
+                      ].map((demo) => (
+                        <div
+                          key={demo.id}
+                          onClick={() => {
+                            setFormData((prev) => ({
+                              ...prev,
+                              detect_stream_url: demo.id,
+                              rtsp_url: demo.id,
+                              record_stream_url: demo.id
+                            }));
+                            setUploadedFileName(demo.id);
+                          }}
+                          className={`p-2 rounded border cursor-pointer text-left transition-colors ${
+                            formData.detect_stream_url === demo.id
+                              ? 'border-white bg-zinc-800 text-white'
+                              : 'border-zinc-800 bg-black text-zinc-400 hover:border-zinc-600'
+                          }`}
+                        >
+                          <div className="font-semibold text-[11px] text-white truncate">{demo.label}</div>
+                          <div className="text-[9px] text-zinc-500 font-mono truncate mt-0.5">{demo.id}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}

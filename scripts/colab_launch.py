@@ -191,19 +191,17 @@ def build_frontend():
     if not npm_cmd:
         error_exit("Frontend Build", "Node.js / npm not found on system.")
 
-    dist_index = FRONTEND_DIR / "dist" / "index.html"
-    if not dist_index.exists():
-        node_modules = FRONTEND_DIR / "node_modules"
-        if not node_modules.exists():
-            log("FRONTEND", "Installing npm packages...")
-            res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
-            if res1.returncode != 0:
-                error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
+    node_modules = FRONTEND_DIR / "node_modules"
+    if not node_modules.exists():
+        log("FRONTEND", "Installing npm packages...")
+        res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
+        if res1.returncode != 0:
+            error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
 
-        log("FRONTEND", "Compiling production assets with Vite...")
-        res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
-        if res2.returncode != 0:
-            error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
+    log("FRONTEND", "Compiling production assets with Vite...")
+    res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
+    if res2.returncode != 0:
+        error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
     log("FRONTEND", "Frontend production build ready.")
 
 def start_backend_service(use_cuda: bool):

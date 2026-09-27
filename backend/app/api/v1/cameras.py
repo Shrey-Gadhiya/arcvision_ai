@@ -197,17 +197,33 @@ async def restart_camera(camera_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/upload-video")
 async def upload_camera_video(
-    file: UploadFile = File(...)
+    request: Request,
+    file: Optional[UploadFile] = File(None)
 ):
     """
     Uploads an MP4 / video file to serve as a custom CCTV camera feed source.
     Streams directly to disk to handle large video files efficiently.
     """
-    raw_name = file.filename or "video.mp4"
+    actual_file = file
+    if actual_file is None:
+        try:
+            form = await request.form()
+            for key in ["file", "video", "upload", "media"]:
+                if key in form:
+                    actual_file = form[key]
+                    break
+            if actual_file is None and len(form) > 0:
+                actual_file = list(form.values())[0]
+        except Exception:
+            pass
+
+    if actual_file is None or not hasattr(actual_file, "filename") or not actual_file.filename:
+        raise HTTPException(status_code=400, detail="No video file provided in multipart upload ('file' field required).")
+
+    raw_name = actual_file.filename or "video.mp4"
     ext = Path(raw_name).suffix.lower()
     allowed_exts = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".3gp", ".wmv", ".mpeg", ".mpg"]
     if ext not in allowed_exts:
-        # Default to .mp4 if extension is missing or unusual
         ext = ".mp4"
 
     clean_basename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(raw_name).stem)[:50]
@@ -220,11 +236,21 @@ async def upload_camera_video(
 
     try:
         with open(target_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            if hasattr(actual_file, "file") and actual_file.file:
+                shutil.copyfileobj(actual_file.file, buffer)
+            elif hasattr(actual_file, "read"):
+                chunk = await actual_file.read(1024 * 1024)
+                while chunk:
+                    buffer.write(chunk)
+                    chunk = await actual_file.read(1024 * 1024)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write video file: {str(e)}")
     finally:
-        await file.close()
+        if hasattr(actual_file, "close"):
+            try:
+                await actual_file.close()
+            except Exception:
+                pass
 
     rel_path = f"data/uploads/{safe_name}"
     return {

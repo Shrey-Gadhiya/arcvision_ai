@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { Camera, CameraRecordingMode, StreamType } from '../../types';
-import { apiClient } from '../../api/client';
+import { apiClient, API_V1 } from '../../api/client';
 
 interface AddCameraWizardProps {
   isOpen: boolean;
@@ -40,9 +40,28 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
     setIsUploading(true);
     try {
       const data = new FormData();
-      data.append('file', file);
-      const res = await apiClient.post('/cameras/upload-video', data);
-      const path = res.data.file_path || res.data.relative_path || res.data.filename;
+      data.append('file', file, file.name);
+      
+      const token = localStorage.getItem('arc_token');
+      const uploadUrl = `${API_V1}/cameras/upload-video`;
+
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        body: data,
+      });
+
+      if (!response.ok) {
+        let errMsg = `Upload failed with HTTP ${response.status}`;
+        try {
+          const errJson = await response.json();
+          if (errJson.detail) errMsg = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      const resData = await response.json();
+      const path = resData.file_path || resData.relative_path || resData.filename;
       setFormData((prev) => ({
         ...prev,
         detect_stream_url: path,
@@ -51,7 +70,7 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
       }));
       setUploadedFileName(file.name);
     } catch (err: any) {
-      alert(err.response?.data?.detail || err.message || 'Failed to upload video file.');
+      alert(err.message || 'Failed to upload video file.');
     } finally {
       setIsUploading(false);
     }

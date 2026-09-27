@@ -198,26 +198,52 @@ async def restart_camera(camera_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/upload-video")
 async def upload_camera_video(
     request: Request,
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = None,
+    video: Optional[UploadFile] = None,
+    upload: Optional[UploadFile] = None
 ):
     """
     Uploads an MP4 / video file to serve as a custom CCTV camera feed source.
     Streams directly to disk to handle large video files efficiently.
     """
-    actual_file = file
+    actual_file = file or video or upload
     if actual_file is None:
         try:
             form = await request.form()
             for key in ["file", "video", "upload", "media"]:
-                if key in form:
+                if key in form and hasattr(form[key], "filename"):
                     actual_file = form[key]
                     break
-            if actual_file is None and len(form) > 0:
-                actual_file = list(form.values())[0]
+            if actual_file is None:
+                for v in form.values():
+                    if hasattr(v, "filename") and v.filename:
+                        actual_file = v
+                        break
         except Exception:
             pass
 
+    # If still None, handle direct binary body stream
     if actual_file is None or not hasattr(actual_file, "filename") or not actual_file.filename:
+        try:
+            body = await request.body()
+            if body and len(body) > 100:
+                timestamp = int(time.time())
+                safe_name = f"video_{timestamp}_upload.mp4"
+                uploads_dir = Path(settings.UPLOADS_DIR)
+                uploads_dir.mkdir(parents=True, exist_ok=True)
+                target_path = uploads_dir / safe_name
+                with open(target_path, "wb") as f:
+                    f.write(body)
+                rel_path = f"data/uploads/{safe_name}"
+                return {
+                    "status": "SUCCESS",
+                    "filename": safe_name,
+                    "file_path": str(target_path),
+                    "relative_path": rel_path,
+                    "url": f"/uploads/{safe_name}"
+                }
+        except Exception:
+            pass
         raise HTTPException(status_code=400, detail="No video file provided in multipart upload ('file' field required).")
 
     raw_name = actual_file.filename or "video.mp4"

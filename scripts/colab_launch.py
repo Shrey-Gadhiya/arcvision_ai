@@ -21,6 +21,7 @@ import shutil
 import platform
 import subprocess
 import urllib.request
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 # Resolve paths
@@ -32,10 +33,12 @@ FRONTEND_DIR = REPO_ROOT / "frontend"
 BACKEND_LOG = Path("/tmp/arcvision_backend.log")
 FRONTEND_LOG = Path("/tmp/arcvision_frontend.log")
 TUNNEL_LOG = Path("/tmp/arcvision_tunnel.log")
+LOCALTUNNEL_LOG = Path("/tmp/arcvision_localtunnel.log")
 
 backend_process = None
 frontend_process = None
 tunnel_process = None
+localtunnel_process = None
 shutdown_requested = False
 
 def log(tag: str, msg: str):
@@ -213,10 +216,6 @@ def start_backend_service(use_cuda: bool):
     if not ready:
         error_exit("FastAPI Backend", "Backend failed health check within 35 seconds.", BACKEND_LOG)
     log("BACKEND", "FastAPI backend is READY (HTTP 200).")
-
-LOCALTUNNEL_LOG = LOG_DIR / "localtunnel.log"
-localtunnel_process = None
-
 def start_tunnels() -> Dict[str, str]:
     global tunnel_process, localtunnel_process
     urls = {}

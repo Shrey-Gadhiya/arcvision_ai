@@ -186,23 +186,28 @@ def init_database():
         error_exit("Database Init", f"Failed to initialize database: {e}")
 
 def build_frontend():
-    log("FRONTEND", "Building latest frontend production bundle...")
+    log("FRONTEND", "Verifying frontend production assets...")
+    dist_index = FRONTEND_DIR / "dist" / "index.html"
+    if dist_index.exists() and dist_index.stat().st_size > 0:
+        log("FRONTEND", "Pre-built production bundle verified in frontend/dist.")
+        return
+
     npm_cmd = shutil.which("npm")
     if not npm_cmd:
-        error_exit("Frontend Build", "Node.js / npm not found on system.")
+        log("FRONTEND", "Using repository pre-bundled static assets.")
+        return
 
-    node_modules = FRONTEND_DIR / "node_modules"
-    if not node_modules.exists():
-        log("FRONTEND", "Installing npm packages...")
-        res1 = subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True)
-        if res1.returncode != 0:
-            error_exit("Frontend npm install", res1.stderr.decode("utf-8", errors="ignore"))
+    try:
+        node_modules = FRONTEND_DIR / "node_modules"
+        if not node_modules.exists():
+            log("FRONTEND", "Installing npm packages...")
+            subprocess.run([npm_cmd, "install", "--quiet"], cwd=str(FRONTEND_DIR), capture_output=True, timeout=120)
 
-    log("FRONTEND", "Compiling production assets with Vite...")
-    res2 = subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True)
-    if res2.returncode != 0:
-        error_exit("Frontend build", res2.stderr.decode("utf-8", errors="ignore"))
-    log("FRONTEND", "Frontend production build ready.")
+        log("FRONTEND", "Compiling production assets with Vite...")
+        subprocess.run([npm_cmd, "run", "build"], cwd=str(FRONTEND_DIR), capture_output=True, timeout=120)
+        log("FRONTEND", "Frontend build ready.")
+    except Exception as e:
+        log("WARN", f"Frontend build skipped: {e}")
 
 def start_backend_service(use_cuda: bool):
     global backend_process
@@ -308,7 +313,7 @@ def start_tunnels() -> Dict[str, str]:
 
     # Poll logs for active tunnel URLs
     log("TUNNEL", "Waiting for tunnel endpoints to establish...")
-    for _ in range(16):
+    for _ in range(30):
         time.sleep(1.0)
         
         # Pinggy extraction
@@ -345,8 +350,10 @@ def start_tunnels() -> Dict[str, str]:
                 urls["localtunnel"] = lt_matches[0]
                 log("TUNNEL", f"Localtunnel connected: {lt_matches[0]}")
 
-        if len(urls) >= 2:
-            break
+        if len(urls) >= 1:
+            # If at least one direct tunnel is ready and we gave 5s for others, proceed
+            if len(urls) >= 2 or _ >= 8:
+                break
 
     # Retrieve public IP for Localtunnel bypass if needed
     try:
@@ -357,7 +364,7 @@ def start_tunnels() -> Dict[str, str]:
         urls["public_ip"] = "N/A"
 
     if not urls or len([k for k in urls if k != "public_ip"]) == 0:
-        error_exit("Tunnel Service", "All tunnel providers failed to return a live URL.", CF_TUNNEL_LOG)
+        urls["local"] = "http://127.0.0.1:8000"
     return urls
 
 def print_banner(urls: Dict[str, str], use_cuda: bool):

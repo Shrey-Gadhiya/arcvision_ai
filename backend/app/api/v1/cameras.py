@@ -340,3 +340,103 @@ async def upload_camera_video(
         "relative_path": rel_path,
         "url": f"/uploads/{safe_name}"
     }
+
+@router.post("/upload-chunk")
+async def upload_camera_video_chunk(
+    request: Request,
+    file: Optional[UploadFile] = None
+):
+    """
+    High-reliability chunked upload endpoint.
+    Accepts 512KB - 1MB binary chunks and appends them sequentially to prevent
+    reverse-proxy tunnel timeouts, HTTP payload size limits, or socket drops.
+    """
+    query_params = request.query_params
+    upload_id = query_params.get("upload_id") or request.headers.get("X-Upload-ID")
+    chunk_index = query_params.get("chunk_index")
+    total_chunks = query_params.get("total_chunks")
+    filename = query_params.get("filename")
+
+    chunk_bytes = b""
+    if file is not None:
+        chunk_bytes = await file.read()
+    else:
+        try:
+            form = await request.form()
+            if "file" in form and hasattr(form["file"], "read"):
+                chunk_bytes = await form["file"].read()
+            if not upload_id and "upload_id" in form:
+                upload_id = str(form["upload_id"])
+            if chunk_index is None and "chunk_index" in form:
+                chunk_index = str(form["chunk_index"])
+            if total_chunks is None and "total_chunks" in form:
+                total_chunks = str(form["total_chunks"])
+            if not filename and "filename" in form:
+                filename = str(form["filename"])
+        except Exception:
+            pass
+
+        if not chunk_bytes:
+            chunk_bytes = await request.body()
+
+    if not upload_id:
+        upload_id = f"up_{int(time.time())}"
+    
+    clean_upload_id = re.sub(r'[^a-zA-Z0-9_\-]', '', str(upload_id))[:64]
+    uploads_dir = Path(settings.UPLOADS_DIR)
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    temp_part_file = uploads_dir / f"chunk_{clean_upload_id}.part"
+
+    try:
+        c_idx = int(chunk_index) if chunk_index is not None else 0
+        t_chunks = int(total_chunks) if total_chunks is not None else 1
+    except Exception:
+        c_idx, t_chunks = 0, 1
+
+    # If first chunk, reset part file if it exists
+    if c_idx == 0 and temp_part_file.exists():
+        try:
+            temp_part_file.unlink()
+        except Exception:
+            pass
+
+    # Append chunk data to part file
+    try:
+        with open(temp_part_file, "ab") as f:
+            if chunk_bytes:
+                f.write(chunk_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed writing chunk {c_idx}: {str(e)}")
+
+    is_last = (c_idx >= t_chunks - 1)
+
+    if is_last:
+        raw_name = filename or "uploaded_video.mp4"
+        ext = Path(raw_name).suffix.lower()
+        if ext not in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".3gp", ".wmv", ".mpeg", ".mpg"]:
+            ext = ".mp4"
+        clean_stem = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(raw_name).stem)[:45]
+        timestamp = int(time.time())
+        final_filename = f"video_{timestamp}_{clean_stem}{ext}"
+        final_path = uploads_dir / final_filename
+
+        if temp_part_file.exists():
+            shutil.move(str(temp_part_file), str(final_path))
+        
+        rel_path = f"data/uploads/{final_filename}"
+        return {
+            "status": "COMPLETED",
+            "chunk_index": c_idx,
+            "total_chunks": t_chunks,
+            "filename": final_filename,
+            "file_path": str(final_path),
+            "relative_path": rel_path,
+            "url": f"/uploads/{final_filename}"
+        }
+
+    return {
+        "status": "CHUNK_RECEIVED",
+        "chunk_index": c_idx,
+        "total_chunks": t_chunks
+    }
+

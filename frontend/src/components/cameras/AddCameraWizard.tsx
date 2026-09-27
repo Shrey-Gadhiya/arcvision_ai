@@ -37,61 +37,96 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
     setUploadProgress(0);
-    setUploadStatusText(`Uploading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
+    const totalSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+    setUploadStatusText(`Preparing high-speed chunked upload for ${file.name} (${totalSizeMB} MB)...`);
 
+    const CHUNK_SIZE = 512 * 1024; // 512 KB per chunk to guarantee zero timeouts over reverse tunnels
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const uploadId = `up_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const token = localStorage.getItem('arc_token');
-    const uploadUrl = `${API_V1}/cameras/upload-video`;
-    const formDataUpload = new FormData();
-    formDataUpload.append('file', file, file.name);
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', uploadUrl, true);
-    if (token) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    }
+    let completedSuccessfully = false;
+    let finalPath = '';
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        setUploadProgress(percent);
-        setUploadStatusText(`Uploading: ${percent}% (${(event.loaded / (1024 * 1024)).toFixed(1)} / ${(event.total / (1024 * 1024)).toFixed(1)} MB)`);
-      }
-    };
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(file.size, start + CHUNK_SIZE);
+        const chunkBlob = file.slice(start, end);
 
-    xhr.onload = () => {
-      setIsUploading(false);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const resData = JSON.parse(xhr.responseText);
-          const path = resData.file_path || resData.relative_path || resData.filename;
-          setFormData((prev) => ({
-            ...prev,
-            detect_stream_url: path,
-            rtsp_url: path,
-            record_stream_url: path
-          }));
-          setUploadedFileName(file.name);
-          setUploadStatusText(`Upload complete: ${file.name}`);
-        } catch (err) {
-          alert('Failed to parse upload response.');
+        let attempt = 0;
+        let chunkSuccess = false;
+        let lastError = '';
+
+        while (attempt < 4 && !chunkSuccess) {
+          attempt++;
+          try {
+            const formData = new FormData();
+            formData.append('file', chunkBlob, file.name);
+
+            const uploadUrl = `${API_V1}/cameras/upload-chunk?upload_id=${encodeURIComponent(uploadId)}&chunk_index=${i}&total_chunks=${totalChunks}&filename=${encodeURIComponent(file.name)}`;
+
+            const response = await fetch(uploadUrl, {
+              method: 'POST',
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+              body: formData
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            chunkSuccess = true;
+
+            const percent = Math.min(100, Math.round(((i + 1) / totalChunks) * 100));
+            const currentMB = ((end) / (1024 * 1024)).toFixed(1);
+            setUploadProgress(percent);
+            setUploadStatusText(`Uploading: ${percent}% (${currentMB} / ${totalSizeMB} MB) • Chunk ${i + 1}/${totalChunks}`);
+
+            if (i === totalChunks - 1) {
+              finalPath = data.file_path || data.relative_path || data.filename;
+              completedSuccessfully = true;
+            }
+          } catch (err: any) {
+            lastError = err.message || 'Chunk error';
+            if (attempt < 4) {
+              setUploadStatusText(`Retrying chunk ${i + 1}/${totalChunks} (Attempt ${attempt + 1})...`);
+              await new Promise((res) => setTimeout(res, 800 * attempt));
+            }
+          }
         }
-      } else {
-        alert(`Upload failed with status HTTP ${xhr.status}: ${xhr.statusText}`);
+
+        if (!chunkSuccess) {
+          throw new Error(`Failed uploading chunk ${i + 1} after 4 attempts: ${lastError}`);
+        }
       }
-    };
 
-    xhr.onerror = () => {
+      if (completedSuccessfully && finalPath) {
+        setFormData((prev) => ({
+          ...prev,
+          detect_stream_url: finalPath,
+          rtsp_url: finalPath,
+          record_stream_url: finalPath
+        }));
+        setUploadedFileName(file.name);
+        setUploadStatusText(`Upload complete: ${file.name} (Ready for AI inference)`);
+      }
+    } catch (err: any) {
+      alert(`Video upload error: ${err.message || 'Connection lost'}. You can also use one-click demo presets below.`);
+      setUploadStatusText('Upload interrupted. Please try again or select a preset.');
+    } finally {
       setIsUploading(false);
-      alert('Network error during video upload. If uploading over a tunnel, try choosing a local preset or smaller video clip.');
-    };
-
-    xhr.send(formDataUpload);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   const handleFetchRemoteUrl = async () => {

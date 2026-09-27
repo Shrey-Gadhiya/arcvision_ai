@@ -107,17 +107,19 @@ signal.signal(signal.SIGTERM, cleanup_processes)
 def check_system_tools():
     log("ENV", "Checking Linux system tools...")
     if platform.system() == "Linux":
-        # Check ffmpeg and ssh
-        tools_to_install = []
-        if not shutil.which("ffmpeg"):
-            tools_to_install.extend(["ffmpeg", "libgl1", "libglib2.0-0"])
-        if not shutil.which("ssh"):
-            tools_to_install.append("openssh-client")
+        try:
+            tools_to_install = []
+            if not shutil.which("ffmpeg"):
+                tools_to_install.extend(["ffmpeg", "libgl1", "libglib2.0-0"])
+            if not shutil.which("ssh"):
+                tools_to_install.append("openssh-client")
 
-        if tools_to_install:
-            log("ENV", f"Installing system packages: {', '.join(tools_to_install)}...")
-            subprocess.run(["apt-get", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["apt-get", "install", "-y", "-qq"] + tools_to_install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if tools_to_install:
+                log("ENV", f"Installing system packages: {', '.join(tools_to_install)}...")
+                subprocess.run(["apt-get", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["apt-get", "install", "-y", "-qq"] + tools_to_install, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            log("WARN", f"System package check note: {e}")
 
         # Check cloudflared
         if not shutil.which("cloudflared"):
@@ -131,18 +133,19 @@ def check_system_tools():
 
 def check_python_dependencies():
     log("PYTHON", "Verifying Python dependencies...")
-    req_file = BACKEND_DIR / "requirements.txt"
-    if req_file.exists():
+    try:
+        import fastapi
+        import uvicorn
+        import aiosqlite
+        import ultralytics
+        import supervision
+    except ImportError:
+        req_file = BACKEND_DIR / "requirements.txt"
+        log("PYTHON", f"Installing dependencies from {req_file}...")
         try:
-            import fastapi
-            import uvicorn
-            import ultralytics
-            import supervision
-        except ImportError:
-            log("PYTHON", f"Installing dependencies from {req_file}...")
-            res = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)])
-            if res.returncode != 0:
-                error_exit("Python Dependencies", "pip install failed on requirements.txt")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)], check=False)
+        except Exception as e:
+            log("WARN", f"pip install note: {e}")
 
 def check_gpu() -> bool:
     log("GPU", "Auditing hardware acceleration...")

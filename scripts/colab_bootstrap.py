@@ -40,11 +40,22 @@ def main():
         subprocess.run(["git", "reset", "--hard", f"origin/{branch}", "--quiet"], cwd=str(repo_dir), check=True)
 
     os.chdir(str(repo_dir))
+    sys.path.insert(0, str(repo_dir / "backend"))
+    sys.path.insert(0, str(repo_dir))
     
-    # Launch Master Launcher
+    # Launch Master Launcher directly in active runtime
     launcher_path = repo_dir / "scripts" / "colab_launch.py"
-    print(f"[ARC VISION] Launching Master Controller via {sys.executable}...")
-    subprocess.run([sys.executable, str(launcher_path)], cwd=str(repo_dir), check=True)
+    print(f"[ARC VISION] Launching Master Controller ({launcher_path})...\n")
+    
+    with open(launcher_path, "r", encoding="utf-8") as f:
+        code_content = f.read()
+    
+    global_scope = {
+        "__name__": "__main__",
+        "__file__": str(launcher_path),
+        "__builtins__": __builtins__
+    }
+    exec(code_content, global_scope)
 
 if __name__ == "__main__":
     main()

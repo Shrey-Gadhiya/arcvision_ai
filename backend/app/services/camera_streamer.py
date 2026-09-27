@@ -853,6 +853,20 @@ class CameraStreamer:
                         "clip": {"status": "ENCODING_ASYNC"},
                         "crop": crop_meta
                     }
+                elif det.class_name in ["person", "car", "truck", "bus", "motorcycle"]:
+                    # Auto-capture evidence on prominent object sightings even without custom user rules
+                    now_ts = time.time()
+                    if (now_ts - self._last_clip_time) > 12.0:
+                        self._last_clip_time = now_ts
+                        code = f"INC-{time.strftime('%Y')}-{self.camera_id:02d}{det.track_id:02d}"
+                        snap_meta = evidence_manager.save_snapshot(self.camera_id, frame, code)
+                        crop_meta = evidence_manager.save_crop(frame, det.box, crop_type=f"CROP_{det.class_name.upper()}", prefix=code)
+                        has_incident_this_frame = True
+                        evidence_package = {
+                            "snapshot": snap_meta,
+                            "clip": {"status": "ENCODING_ASYNC"},
+                            "crop": crop_meta
+                        }
 
             # 4. Perception Orchestrator (Fall, Weapon, Fire, Crowd)
             try:
@@ -1031,16 +1045,24 @@ class CameraStreamer:
                             det.attributes["is_matched"] = True
 
                 annotated = self._annotate_frame(frame, current_detections)
-                ret_ann, jpeg_ann = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 72])
-                ret_raw, jpeg_raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+
+                # Downscale preview frame for ultra-fast turbo JPEG encoding & silky smooth MJPEG streaming
+                h_f, w_f = frame.shape[:2]
+                if w_f > 960:
+                    preview_w = 960
+                    preview_h = int(960 * h_f / w_f)
+                    preview_ann = cv2.resize(annotated, (preview_w, preview_h), interpolation=cv2.INTER_LINEAR)
+                else:
+                    preview_ann = annotated
+
+                ret_ann, jpeg_ann = cv2.imencode('.jpg', preview_ann, [cv2.IMWRITE_JPEG_QUALITY, 68])
 
                 with self._lock:
                     self.latest_frame = frame
                     self.latest_annotated_frame = annotated
                     if ret_ann:
                         self.latest_jpeg_bytes = jpeg_ann.tobytes()
-                    if ret_raw:
-                        self.latest_raw_jpeg_bytes = jpeg_raw.tobytes()
+                    self.latest_raw_jpeg_bytes = None
 
                 # 2. Buffer for recording and evidence
                 evidence_manager.buffer_frame(self.camera_id, frame)

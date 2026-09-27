@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     RECORDINGS_DIR: Path = DATA_DIR / "recordings"
     SNAPSHOTS_DIR: Path = DATA_DIR / "snapshots"
     UPLOADS_DIR: Path = DATA_DIR / "uploads"
+    MODELS_DIR: Path = DATA_DIR / "models"
     DATABASE_URL: str = f"sqlite+aiosqlite:///{DATA_DIR.as_posix()}/arc_vision.db"
     
     CORS_ORIGINS: List[str] = [

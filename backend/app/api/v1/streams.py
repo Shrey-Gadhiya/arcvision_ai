@@ -9,23 +9,28 @@ router = APIRouter(prefix="/streams", tags=["Live Streams"])
 async def frame_generator(camera_id: int, annotated: bool = True):
     """
     Generates standard multipart/x-mixed-replace MJPEG stream frames.
+    Event-driven by streamer frame count to eliminate buffer lags and tunnel queue congestion.
     """
     streamer = stream_manager.get_streamer(camera_id)
     if not streamer:
         return
 
-    target_rate = max(20, streamer.target_fps)
-    interval = 1.0 / target_rate
+    last_count = -1
+    fps = max(20, streamer.target_fps)
+    max_sleep = 1.0 / fps
 
     try:
         while streamer.is_running:
-            jpeg_bytes = streamer.get_jpeg_bytes(annotated=annotated)
-            if jpeg_bytes is not None:
-                yield (
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n'
-                )
-            await asyncio.sleep(interval)
+            curr_count = streamer.frame_count
+            if curr_count != last_count:
+                last_count = curr_count
+                jpeg_bytes = streamer.get_jpeg_bytes(annotated=annotated)
+                if jpeg_bytes is not None:
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n'
+                    )
+            await asyncio.sleep(0.015)
     except (asyncio.CancelledError, GeneratorExit):
         pass
     except Exception:

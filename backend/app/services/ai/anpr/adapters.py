@@ -333,6 +333,35 @@ class EasyOCRPlateAdapter(BasePlateOCRAdapter):
         ]
         return best_candidate
 
+from pathlib import Path
+from app.core.config import settings
+
+def _resolve_crnn_model_path(filename: str = "crnn_en_2021sep.onnx", custom_path: Optional[str] = None) -> str:
+    if custom_path and os.path.exists(custom_path):
+        return str(Path(custom_path).resolve())
+    clean_fn = Path(filename).name
+    candidates = [
+        settings.MODELS_DIR / "ocr" / clean_fn,
+        settings.MODELS_DIR / clean_fn,
+        Path("data/models/ocr") / clean_fn,
+        Path("data/models") / clean_fn,
+        Path("backend/data/models/ocr") / clean_fn,
+        Path("backend/data/models") / clean_fn,
+        Path(__file__).resolve().parent.parent.parent.parent / "data" / "models" / "ocr" / clean_fn,
+        Path(__file__).resolve().parent.parent.parent.parent / "data" / "models" / clean_fn,
+        Path("/content/ARCVISION/backend/data/models/ocr") / clean_fn,
+        Path("/content/ARCVISION/backend/data/models") / clean_fn,
+        Path("/kaggle/working/ARCVISION/backend/data/models/ocr") / clean_fn,
+        Path("/kaggle/working/ARCVISION/backend/data/models") / clean_fn,
+    ]
+    for c in candidates:
+        try:
+            if c and c.exists() and c.is_file() and c.stat().st_size > 0:
+                return str(c.resolve())
+        except Exception:
+            pass
+    return str((settings.MODELS_DIR / "ocr" / clean_fn).resolve())
+
 class CRNNPlateOCRAdapter(BasePlateOCRAdapter):
     """
     Real Neural CRNN Plate OCR Adapter using OpenCV DNN and CTC Decoding.
@@ -343,11 +372,11 @@ class CRNNPlateOCRAdapter(BasePlateOCRAdapter):
     def __init__(
         self,
         name: str = "crnn_plate_ocr",
-        model_path: str = "data/models/ocr/crnn_en_2021sep.onnx",
+        model_path: Optional[str] = None,
         device: str = "cpu"
     ):
         super().__init__(name=name, device=device)
-        self.model_path = model_path
+        self.model_path = _resolve_crnn_model_path("crnn_en_2021sep.onnx", model_path or os.getenv("CRNN_OCR_MODEL_PATH"))
         self.net = None
         self.load()
 
@@ -355,6 +384,7 @@ class CRNNPlateOCRAdapter(BasePlateOCRAdapter):
         if not os.path.exists(self.model_path):
             self.status = AdapterStatus.UNAVAILABLE
             self.last_error = f"CRNN model weights not found at {self.model_path}"
+            logger.warning(self.last_error)
             return False
         try:
             self.net = cv2.dnn.readNetFromONNX(self.model_path)

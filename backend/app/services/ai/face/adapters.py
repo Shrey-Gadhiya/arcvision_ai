@@ -12,20 +12,32 @@ from app.services.ai.face.base import (
 )
 from app.services.ai.face.quality import FaceQualityChecker
 
+from pathlib import Path
+from app.core.config import settings
+
 def _resolve_model_path(filename: str, custom_path: Optional[str] = None) -> str:
     if custom_path and os.path.exists(custom_path):
-        return custom_path
+        return str(Path(custom_path).resolve())
+    clean_fn = Path(filename).name
     candidates = [
-        os.path.join(os.path.dirname(__file__), "weights", filename),
-        os.path.join(os.path.dirname(__file__), "../../../../data/models", filename),
-        os.path.join(os.path.dirname(__file__), "../../../data/models", filename),
-        os.path.join(os.getcwd(), "data", "models", filename),
-        os.path.join(os.getcwd(), "backend", "data", "models", filename),
+        settings.MODELS_DIR / clean_fn,
+        settings.MODELS_DIR / "face" / clean_fn,
+        Path("data/models") / clean_fn,
+        Path("data/models/face") / clean_fn,
+        Path("backend/data/models") / clean_fn,
+        Path("backend/data/models/face") / clean_fn,
+        Path(__file__).resolve().parent.parent.parent.parent / "data" / "models" / clean_fn,
+        Path(__file__).resolve().parent.parent.parent.parent / "data" / "models" / "face" / clean_fn,
+        Path("/content/ARCVISION/backend/data/models") / clean_fn,
+        Path("/kaggle/working/ARCVISION/backend/data/models") / clean_fn,
     ]
     for c in candidates:
-        if os.path.exists(c):
-            return c
-    return candidates[0]
+        try:
+            if c and c.exists() and c.is_file() and c.stat().st_size > 0:
+                return str(c.resolve())
+        except Exception:
+            pass
+    return str((settings.MODELS_DIR / clean_fn).resolve())
 
 class YuNetFaceDetectorAdapter(BaseFaceDetectorAdapter):
     """

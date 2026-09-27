@@ -251,7 +251,8 @@ def start_backend_service(use_cuda: bool):
 
     # Health polling
     ready = False
-    for attempt in range(1, 40):
+    log("BACKEND", "Waiting for backend server to warm up and pass health check...")
+    for attempt in range(1, 120):
         time.sleep(1.0)
         try:
             req = urllib.request.Request("http://127.0.0.1:8000/health")
@@ -268,11 +269,15 @@ def start_backend_service(use_cuda: bool):
                         break
             except Exception:
                 pass
+
+        if attempt % 10 == 0:
+            log("BACKEND", f"Warming up neural models & services ({attempt}s)...")
+
         if backend_process.poll() is not None:
             break
 
     if not ready:
-        error_exit("FastAPI Backend", "Backend failed health check within 40 seconds.", BACKEND_LOG)
+        error_exit("FastAPI Backend", "Backend failed health check within 120 seconds.", BACKEND_LOG)
     log("BACKEND", "FastAPI backend is READY (HTTP 200).")
 
 def start_tunnels() -> Dict[str, str]:

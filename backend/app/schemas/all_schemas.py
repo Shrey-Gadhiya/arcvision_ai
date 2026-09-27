@@ -61,6 +61,13 @@ class CameraBase(BaseModel):
     motion_threshold: int = 25
     motion_min_area: int = 500
     anpr_enabled: bool = True
+    drone_detection_enabled: bool = True
+    face_concealment_enabled: bool = True
+    one_way_lane_enabled: bool = True
+    weapon_detection_enabled: bool = True
+    people_counting_enabled: bool = True
+    face_recognition_enabled: bool = True
+    cross_camera_reid_enabled: bool = True
     night_mode_enabled: bool = True
 
 class CameraCreate(CameraBase):
@@ -87,6 +94,13 @@ class CameraUpdate(BaseModel):
     active_profile: Optional[str] = None
     motion_detection_enabled: Optional[bool] = None
     anpr_enabled: Optional[bool] = None
+    drone_detection_enabled: Optional[bool] = None
+    face_concealment_enabled: Optional[bool] = None
+    one_way_lane_enabled: Optional[bool] = None
+    weapon_detection_enabled: Optional[bool] = None
+    people_counting_enabled: Optional[bool] = None
+    face_recognition_enabled: Optional[bool] = None
+    cross_camera_reid_enabled: Optional[bool] = None
     night_mode_enabled: Optional[bool] = None
     is_active: Optional[bool] = None
 

@@ -44,10 +44,17 @@ class Camera(Base):
     pre_event_seconds = Column(Integer, default=5, nullable=False)
     post_event_seconds = Column(Integer, default=15, nullable=False)
     
-    # Operational profile & motion gating
+    # Operational profile & feature toggles (Full global & per-camera customization)
     active_profile = Column(String(50), default="NORMAL", nullable=False) # NORMAL, NIGHT, HIGH_SECURITY, etc.
     motion_detection_enabled = Column(Boolean, default=True, nullable=False)
     anpr_enabled = Column(Boolean, default=True, nullable=False) # Enable all vehicle license plate detection
+    drone_detection_enabled = Column(Boolean, default=True, nullable=False) # SkyShield UAV & aerial threat detector
+    face_concealment_enabled = Column(Boolean, default=True, nullable=False) # Masking / Balaclava / Hidden face detector
+    one_way_lane_enabled = Column(Boolean, default=True, nullable=False) # Wrong-way driving & traffic lane flow
+    weapon_detection_enabled = Column(Boolean, default=True, nullable=False) # Firearms, knives & suspicious objects
+    people_counting_enabled = Column(Boolean, default=True, nullable=False) # Bidirectional line crossing In/Out counters
+    face_recognition_enabled = Column(Boolean, default=True, nullable=False) # YuNet + SFace Biometric Watchlist Matching
+    cross_camera_reid_enabled = Column(Boolean, default=True, nullable=False) # Multi-camera Re-ID & Journey Tracking
     motion_threshold = Column(Integer, default=25, nullable=False) # 1-100 sensitivity
     motion_min_area = Column(Integer, default=500, nullable=False) # min contour pixel area
     

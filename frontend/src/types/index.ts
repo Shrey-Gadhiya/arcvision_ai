@@ -40,6 +40,13 @@ export interface Camera {
   active_profile: string;
   motion_detection_enabled: boolean;
   anpr_enabled?: boolean;
+  drone_detection_enabled?: boolean;
+  face_concealment_enabled?: boolean;
+  one_way_lane_enabled?: boolean;
+  weapon_detection_enabled?: boolean;
+  people_counting_enabled?: boolean;
+  face_recognition_enabled?: boolean;
+  cross_camera_reid_enabled?: boolean;
   night_mode_enabled?: boolean;
   // Phase K: PTZ & Geospatial
   ptz_enabled?: boolean;

@@ -132,21 +132,81 @@ class PerceptionOrchestrator:
                 logger.error(f"[Fault-Isolation] FireSmokeDetector error on Cam #{camera_id}: {e}")
                 self.fire_smoke_adapter.record_error(str(e))
 
-        # 4. Dangerous Object / Weapon Detection (every N frames, default 5)
-        weapon_enabled = profile.get("weapon_detection", False)
-        weapon_interval = profile.get("weapon_interval_frames", 5)
-        if weapon_enabled and (frame_idx % weapon_interval == 0) and self.weapon_adapter.is_loaded:
+        # 4. Dangerous Object / Weapon Detection (every N frames, default 3)
+        weapon_enabled = profile.get("weapon_detection", True)
+        weapon_interval = profile.get("weapon_interval_frames", 3)
+        if weapon_enabled and (frame_idx % weapon_interval == 0):
             try:
-                raw_weapon_dets = self.weapon_adapter.detect(frame)
-                for wd in raw_weapon_dets:
-                    wevt = self.weapon_adapter.build_weapon_event(wd, camera_id)
-                    wevt["camera_id"] = camera_id
-                    events.append(wevt)
+                # Check for weapons or weapon classes in tracked objects
+                for obj in tracked_objects:
+                    cname = getattr(obj, "class_name", "").lower()
+                    if cname in ["knife", "gun", "pistol", "rifle", "weapon", "scissors"]:
+                        events.append({
+                            "event_type": "DANGEROUS_OBJECT_DETECTED",
+                            "severity": "CRITICAL",
+                            "camera_id": camera_id,
+                            "track_id": obj.track_id,
+                            "class_name": cname.upper(),
+                            "box": obj.box,
+                            "confidence": obj.confidence,
+                            "explanation": f"High-threat weapon / bladed object detected ({cname.upper()}, {int(obj.confidence * 100)}% confidence)"
+                        })
+                        obj.attributes["is_weapon"] = True
+
+                if self.weapon_adapter.is_loaded:
+                    raw_weapon_dets = self.weapon_adapter.detect(frame)
+                    for wd in raw_weapon_dets:
+                        wevt = self.weapon_adapter.build_weapon_event(wd, camera_id)
+                        wevt["camera_id"] = camera_id
+                        events.append(wevt)
             except Exception as e:
                 logger.error(f"[Fault-Isolation] WeaponDetector error on Cam #{camera_id}: {e}")
                 self.weapon_adapter.record_error(str(e))
 
-        # 5. Pose Estimation (every N frames, default 3)
+        # 5. Drone & Aerial Threat Detection (every N frames, default 2)
+        drone_enabled = profile.get("drone_detection", True)
+        drone_interval = profile.get("drone_interval_frames", 2)
+        if drone_enabled and (frame_idx % drone_interval == 0):
+            try:
+                from app.services.ai.perception.drone_adapter import drone_detector
+                d_evts = drone_detector.detect_aerial_objects(frame, tracked_objects, camera_id)
+                events.extend(d_evts)
+            except Exception as e:
+                logger.error(f"[Fault-Isolation] DroneDetector error on Cam #{camera_id}: {e}")
+
+        # 6. Face Concealment & Masking Detection (every N frames, default 3)
+        face_concealment_enabled = profile.get("face_concealment", True)
+        concealment_interval = profile.get("concealment_interval_frames", 3)
+        if face_concealment_enabled and (frame_idx % concealment_interval == 0):
+            try:
+                from app.services.ai.face.face_concealment_detector import face_concealment_detector
+                for obj in tracked_objects:
+                    if getattr(obj, "class_name", "") in ["person", "human", "pedestrian"]:
+                        c_evt = face_concealment_detector.analyze_person_face_visibility(
+                            frame=frame,
+                            person_box=obj.box,
+                            track_id=obj.track_id,
+                            camera_id=camera_id
+                        )
+                        if c_evt:
+                            events.append(c_evt)
+                            obj.attributes["face_concealed"] = True
+                            obj.attributes["concealment_type"] = c_evt.get("concealment_type")
+            except Exception as e:
+                logger.error(f"[Fault-Isolation] FaceConcealment error on Cam #{camera_id}: {e}")
+
+        # 7. Unattended & Suspicious Package Detection (every N frames, default 5)
+        unattended_enabled = profile.get("unattended_objects", True)
+        unattended_interval = profile.get("unattended_interval_frames", 5)
+        if unattended_enabled and (frame_idx % unattended_interval == 0):
+            try:
+                from app.services.ai.perception.unattended_object_adapter import unattended_object_detector
+                u_evts = unattended_object_detector.evaluate_unattended_objects(camera_id, tracked_objects)
+                events.extend(u_evts)
+            except Exception as e:
+                logger.error(f"[Fault-Isolation] UnattendedObjectDetector error on Cam #{camera_id}: {e}")
+
+        # 8. Pose Estimation (every N frames, default 3)
         pose_enabled = profile.get("pose_estimation", False)
         pose_interval = profile.get("pose_interval_frames", 3)
         if pose_enabled and (frame_idx % pose_interval == 0):
@@ -154,10 +214,8 @@ class PerceptionOrchestrator:
                 for obj in tracked_objects:
                     if obj.class_name == "person":
                         if self.pose_adapter.is_loaded:
-                            # Run neural pose
                             pass
                         else:
-                            # Attach fallback approximated keypoints for UI skeleton
                             pose_det = self.pose_adapter.extract_pose_from_geometry(obj.box, obj.track_id)
                             obj.attributes["pose"] = pose_det.to_dict()
             except Exception as e:

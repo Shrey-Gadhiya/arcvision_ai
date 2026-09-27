@@ -1,5 +1,7 @@
+import math
 import json
-from typing import List, Dict, Tuple, Any
+import time
+from typing import List, Dict, Tuple, Any, Optional
 
 def is_point_in_polygon(x: float, y: float, polygon: List[Tuple[float, float]]) -> bool:
     """
@@ -44,12 +46,8 @@ def get_crossing_direction(
     Determines crossing direction relative to tripwire line from start -> end.
     Returns "A_TO_B" (crossing from left to right of vector) or "B_TO_A" (right to left).
     """
-    # Vector of the tripwire: L = line_end - line_start
     lx = line_end[0] - line_start[0]
     ly = line_end[1] - line_start[1]
-    
-    # Vector of movement: M = p_curr - p_prev
-    # 2D Cross product: L.x * M.y - L.y * M.x
     cross = lx * (p_curr[1] - p_prev[1]) - ly * (p_curr[0] - p_prev[0])
     
     if cross > 0:
@@ -59,6 +57,32 @@ def get_crossing_direction(
     return "UNKNOWN"
 
 class ZoneAnalyticsEngine:
+    def __init__(self):
+        # Per-camera line crossing counts: {cam_id: {"in": int, "out": int, "occupancy": int}}
+        self._counts: Dict[int, Dict[str, int]] = {}
+        self._counted_tracks: Dict[Tuple[int, int], str] = {} # (cam_id, track_id) -> direction
+
+    def get_camera_counts(self, camera_id: int) -> Dict[str, int]:
+        if camera_id not in self._counts:
+            self._counts[camera_id] = {"in_count": 0, "out_count": 0, "occupancy": 0}
+        return dict(self._counts[camera_id])
+
+    def register_crossing(self, camera_id: int, track_id: int, direction: str, class_name: str = "person"):
+        key = (camera_id, track_id)
+        if key in self._counted_tracks:
+            return
+        
+        counts = self.get_camera_counts(camera_id)
+        if direction in ("A_TO_B", "ENTRY", "IN"):
+            counts["in_count"] += 1
+            counts["occupancy"] = max(0, counts["in_count"] - counts["out_count"])
+            self._counted_tracks[key] = "IN"
+        elif direction in ("B_TO_A", "EXIT", "OUT"):
+            counts["out_count"] += 1
+            counts["occupancy"] = max(0, counts["in_count"] - counts["out_count"])
+            self._counted_tracks[key] = "OUT"
+        self._counts[camera_id] = counts
+
     @staticmethod
     def point_in_polygon(point: Tuple[float, float], polygon: List[Any]) -> bool:
         if not polygon or len(polygon) < 3:
@@ -73,9 +97,6 @@ class ZoneAnalyticsEngine:
 
     @staticmethod
     def check_zone_occupancy(centroid: Tuple[float, float], zones: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Tests centroid (x, y) against all active zones.
-        """
         cx, cy = centroid
         active_in = []
         for zone in zones:
@@ -84,14 +105,14 @@ class ZoneAnalyticsEngine:
                 active_in.append(zone)
         return active_in
 
-    @staticmethod
     def check_tripwire_crossing(
+        self,
         trajectory: List[Tuple[float, float, float]],
-        tripwires: List[Dict[str, Any]]
+        tripwires: List[Dict[str, Any]],
+        camera_id: int = 1,
+        track_id: int = -1,
+        class_name: str = "person"
     ) -> List[Dict[str, Any]]:
-        """
-        Tests if the last trajectory segment crossed any active tripwires.
-        """
         if len(trajectory) < 2:
             return []
 
@@ -100,12 +121,16 @@ class ZoneAnalyticsEngine:
 
         breaches = []
         for tw in tripwires:
-            start = tw["line"]["start"] # (x, y)
-            end = tw["line"]["end"]     # (x, y)
+            start = tw["line"]["start"]
+            end = tw["line"]["end"]
 
             if do_lines_intersect(p_prev, p_curr, start, end):
                 direction = get_crossing_direction(p_prev, p_curr, start, end)
                 required_dir = tw.get("direction", "BIDIRECTIONAL")
+                
+                # Update bidirectional In/Out entry counter
+                self.register_crossing(camera_id, track_id, direction, class_name)
+
                 if required_dir == "BIDIRECTIONAL" or required_dir == direction:
                     breaches.append({
                         "tripwire": tw,
@@ -113,5 +138,40 @@ class ZoneAnalyticsEngine:
                     })
 
         return breaches
+
+    @staticmethod
+    def check_one_way_lane_violation(
+        trajectory: List[Tuple[float, float, float]],
+        lane_angle_deg: float, # Expected heading direction in degrees (0 to 360)
+        tolerance_deg: float = 85.0
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Detects if a vehicle is travelling against the authorized one-way traffic lane.
+        """
+        if len(trajectory) < 3:
+            return None
+
+        # Compute movement vector over last 3 points
+        dx = trajectory[-1][0] - trajectory[0][0]
+        dy = trajectory[-1][1] - trajectory[0][1]
+        dist = math.hypot(dx, dy)
+        if dist < 0.05:
+            return None
+
+        # Actual vehicle heading angle in degrees (0 = East, 90 = South, 180 = West, 270 = North)
+        actual_angle = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
+        angle_diff = abs(actual_angle - lane_angle_deg)
+        if angle_diff > 180.0:
+            angle_diff = 360.0 - angle_diff
+
+        # If vehicle heading is opposing allowed lane angle by > tolerance (> 100 degrees = wrong way)
+        if angle_diff > (180.0 - tolerance_deg):
+            return {
+                "is_violation": True,
+                "actual_angle": round(actual_angle, 1),
+                "expected_angle": round(lane_angle_deg, 1),
+                "angle_diff": round(angle_diff, 1)
+            }
+        return None
 
 zone_engine = ZoneAnalyticsEngine()

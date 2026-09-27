@@ -530,12 +530,21 @@ class CameraStreamer:
 
             is_vehicle = det.class_name in ["car", "truck", "bus", "motorcycle", "bicycle", "bike", "scooter", "motorbike", "vehicle", "van", "auto", "train"]
             is_person = det.class_name in ["person", "human", "pedestrian"]
+            is_drone = det.class_name in ["drone", "uav", "quadcopter", "multirotor", "aerial_threat"] or det.attributes.get("is_drone", False)
+            is_weapon = det.class_name in ["knife", "gun", "pistol", "rifle", "weapon", "scissors"] or det.attributes.get("is_weapon", False)
+            is_unattended = det.attributes.get("is_unattended", False)
+            is_concealed = det.attributes.get("face_concealed", False)
+            is_wrong_way = det.attributes.get("is_wrong_way", False)
             is_matched = det.attributes.get("is_matched", False)
             plate_number = det.attributes.get("plate")
 
             # Clean tactical color scheme
-            if is_matched:
+            if is_matched or is_weapon or is_wrong_way:
                 box_color = (0, 0, 255) # Bright Alert Red
+            elif is_drone:
+                box_color = (255, 200, 0) # Cyan/Electric Blue for Aerial UAVs
+            elif is_concealed or is_unattended:
+                box_color = (0, 140, 255) # Warning Amber/Orange
             elif is_vehicle and plate_number:
                 box_color = (0, 255, 128) # Vibrant Neon Green for verified vehicles
             elif is_person:
@@ -545,11 +554,25 @@ class CameraStreamer:
             else:
                 box_color = (200, 200, 200)
 
-            # 1. Clean, perfect, sharp object bounding box
+            # 1. Clean, sharp object bounding box
             cv2.rectangle(overlay, (x1, y1), (x2, y2), box_color, 2)
 
             # 2. Top identification header
-            tag = f"{det.class_name.upper()} {int(det.confidence * 100)}% [#{det.track_id}]"
+            if is_drone:
+                alt = det.attributes.get("drone_alt_m", 15)
+                spd = det.attributes.get("drone_speed_kmh", 25)
+                tag = f"UAV/DRONE [#{det.track_id}] ALT:{alt}m SPD:{spd}km/h"
+            elif is_weapon:
+                tag = f"🚨 WEAPON DETECTED: {det.class_name.upper()} [#{det.track_id}]"
+            elif is_concealed:
+                tag = f"⚠️ CONCEALED FACE [#{det.track_id}]"
+            elif is_unattended:
+                tag = f"⚠️ UNATTENDED {det.class_name.upper()} [#{det.track_id}]"
+            elif is_wrong_way:
+                tag = f"⛔ ONE-WAY VIOLATION [#{det.track_id}]"
+            else:
+                tag = f"{det.class_name.upper()} {int(det.confidence * 100)}% [#{det.track_id}]"
+
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
             by = max(th + 6, y1)
             cv2.rectangle(overlay, (x1, by - th - 5), (x1 + tw + 6, by), (0, 0, 0), -1)
@@ -565,39 +588,60 @@ class CameraStreamer:
 
                 p_box = det.attributes.get("plate_box")
                 if p_box and len(p_box) == 4 and all(0.0 <= v <= 1.0 for v in p_box):
-                    # Precise target square directly around the plate
                     pl_x1 = max(x1, min(x2 - 10, int(x1 + p_box[0] * vw)))
                     pl_y1 = max(y1, min(y2 - 6, int(y1 + p_box[1] * vh)))
                     pl_x2 = max(pl_x1 + 18, min(x2, int(x1 + p_box[2] * vw)))
                     pl_y2 = max(pl_y1 + 8, min(y2, int(y1 + p_box[3] * vh)))
                     cv2.rectangle(overlay, (pl_x1, pl_y1), (pl_x2, pl_y2), pl_color, 2)
                     
-                    # Plate label directly on/above target square
                     ply = max(ph + 4, pl_y1 - 3)
                     cv2.rectangle(overlay, (pl_x1, ply - ph - 4), (pl_x1 + pw + 6, ply), (0, 0, 0), -1)
                     cv2.rectangle(overlay, (pl_x1, ply - ph - 4), (pl_x1 + pw + 6, ply), pl_color, 1)
                     cv2.putText(overlay, p_label, (pl_x1 + 3, ply - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
                 else:
-                    # High-contrast plate banner directly below vehicle
                     ply = min(h - 4, y2 + ph + 6) if (y2 + ph + 10) < h else max(18, y1 - 22)
                     cv2.rectangle(overlay, (x1, ply - ph - 4), (x1 + pw + 6, ply), (0, 0, 0), -1)
                     cv2.rectangle(overlay, (x1, ply - ph - 4), (x1 + pw + 6, ply), pl_color, 1)
                     cv2.putText(overlay, p_label, (x1 + 3, ply - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
 
-            # 4. Person Face / Unique ID Badge
+            # 4. Person Face / Biometrics & Concealment Badge
             if is_person:
                 person_uid = det.attributes.get("unique_person_id")
                 face_name = det.attributes.get("face_name")
-                if person_uid or face_name:
+                is_face_matched = det.attributes.get("is_matched", False)
+                
+                if is_face_matched:
+                    face_tag = f"🚨 WANTED MATCH: {face_name or person_uid}"
+                    badge_color = (0, 0, 255)
+                elif is_concealed:
+                    c_type = det.attributes.get("concealment_type", "MASK / BALACLAVA")
+                    face_tag = f"⚠️ HIDDEN FACE: {c_type}"
+                    badge_color = (0, 140, 255)
+                elif person_uid or face_name:
                     face_tag = f"FACE: {face_name or person_uid}"
+                    badge_color = (0, 220, 255)
+                else:
+                    face_tag = None
+
+                if face_tag:
                     (fw, fh), _ = cv2.getTextSize(face_tag, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
                     fy = min(h - 4, y2 + fh + 6)
                     cv2.rectangle(overlay, (x1, fy - fh - 4), (x1 + fw + 6, fy), (0, 0, 0), -1)
-                    cv2.rectangle(overlay, (x1, fy - fh - 4), (x1 + fw + 6, fy), (0, 220, 255), 1)
-                    cv2.putText(overlay, face_tag, (x1 + 3, fy - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 220, 255), 1)
+                    cv2.rectangle(overlay, (x1, fy - fh - 4), (x1 + fw + 6, fy), badge_color, 1)
+                    cv2.putText(overlay, face_tag, (x1 + 3, fy - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 255, 255), 1)
 
-        # Tactical Status Watermark
+        # Tactical Status Watermark (Top Left)
         cv2.putText(overlay, f"{self.camera_name} | {self.current_fps:.1f} FPS", (15, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Tactical Entry / Exit People Counter HUD (Top Right)
+        counts = zone_engine.get_camera_counts(self.camera_id)
+        hud_text = f"ENTRY IN: {counts['in_count']} | EXIT OUT: {counts['out_count']} | OCCUPANCY: {counts['occupancy']}"
+        (hw, hh), _ = cv2.getTextSize(hud_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        hx = max(10, w - hw - 20)
+        cv2.rectangle(overlay, (hx - 6, 10), (w - 10, 10 + hh + 12), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (hx - 6, 10), (w - 10, 10 + hh + 12), (0, 255, 200), 1)
+        cv2.putText(overlay, hud_text, (hx, 10 + hh + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200), 1)
+
         return overlay
 
     def _run_ocr_for_track(

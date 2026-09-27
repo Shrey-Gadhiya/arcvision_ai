@@ -41,7 +41,7 @@ class UserResponse(BaseModel):
 class CameraBase(BaseModel):
     name: str
     description: Optional[str] = None
-    rtsp_url: str
+    rtsp_url: Optional[str] = "sample.mp4"
     stream_type: StreamType = StreamType.SYNTHETIC
     group_name: str = "Perimeter North"
     location: str = "Sector 4 - Alpha Outpost"
@@ -58,6 +58,8 @@ class CameraBase(BaseModel):
     retention_events_days: int = 30
     active_profile: str = "NORMAL"
     motion_detection_enabled: bool = True
+    motion_threshold: int = 25
+    motion_min_area: int = 500
     anpr_enabled: bool = True
     night_mode_enabled: bool = True
 

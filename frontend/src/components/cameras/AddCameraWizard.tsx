@@ -127,29 +127,45 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
     setIsSubmitting(true);
     try {
       const payload = {
-        name: formData.name || `CAM-${Math.floor(100 + Math.random() * 900)}`,
-        description: formData.description,
+        name: formData.name?.trim() || `CAM-${Math.floor(100 + Math.random() * 900)}`,
+        description: formData.description || undefined,
         rtsp_url: formData.detect_stream_url || formData.rtsp_url || 'sample.mp4',
-        detect_stream_url: formData.detect_stream_url || formData.rtsp_url,
-        record_stream_url: formData.record_stream_url,
-        audio_stream_url: formData.audio_stream_url,
-        stream_type: formData.stream_type,
-        group_name: formData.group_name,
-        location: formData.location,
-        recording_mode: formData.recording_mode,
-        retention_days: Number(formData.retention_days),
-        retention_events_days: Number(formData.retention_events_days),
-        active_profile: formData.active_profile,
-        motion_detection_enabled: formData.motion_detection_enabled,
-        target_fps: Number(formData.target_fps),
-        night_mode_enabled: formData.night_mode_enabled
+        detect_stream_url: formData.detect_stream_url || formData.rtsp_url || 'sample.mp4',
+        record_stream_url: formData.record_stream_url || formData.detect_stream_url || formData.rtsp_url || 'sample.mp4',
+        audio_stream_url: formData.audio_stream_url || undefined,
+        stream_type: formData.stream_type || 'FILE',
+        group_name: formData.group_name || 'Border Sector A',
+        location: formData.location || 'Sector Alpha - Checkpost 1',
+        recording_mode: formData.recording_mode || 'CONTINUOUS',
+        retention_days: Number(formData.retention_days) || 7,
+        retention_events_days: Number(formData.retention_events_days) || 30,
+        active_profile: formData.active_profile || 'NORMAL',
+        motion_detection_enabled: Boolean(formData.motion_detection_enabled),
+        motion_threshold: Number(formData.motion_threshold) || 25,
+        motion_min_area: Number(formData.motion_min_area) || 500,
+        target_fps: Number(formData.target_fps) || 15,
+        night_mode_enabled: Boolean(formData.night_mode_enabled),
+        anpr_enabled: Boolean(formData.anpr_enabled)
       };
 
       const res = await apiClient.post<Camera>('/cameras/', payload);
       onCameraAdded(res.data);
       onClose();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save camera.');
+      console.error('Failed to save camera:', err);
+      let errorMsg = 'Failed to save camera.';
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === 'string') {
+          errorMsg = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          errorMsg = err.response.data.detail.map((e: any) => `${e.loc?.filter((l: any) => l !== 'body').join('.') || 'field'}: ${e.msg}`).join('\n');
+        } else {
+          errorMsg = JSON.stringify(err.response.data.detail);
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      alert(errorMsg);
     } finally {
       setIsSubmitting(false);
     }

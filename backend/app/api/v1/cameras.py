@@ -62,28 +62,40 @@ async def create_camera(
     data: CameraCreate,
     db: AsyncSession = Depends(get_db)
 ):
-    existing = await db.execute(select(Camera).where(Camera.name == data.name))
-    if existing.scalars().first():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Camera with name '{data.name}' already exists. Please choose a unique name."
-        )
+    base_name = data.name.strip() if data.name and data.name.strip() else f"CAM-{int(time.time()) % 10000}"
+    unique_name = base_name
+    counter = 1
+    while True:
+        existing = await db.execute(select(Camera).where(Camera.name == unique_name))
+        if not existing.scalars().first():
+            break
+        counter += 1
+        unique_name = f"{base_name} ({counter})"
 
-    cam = Camera(**data.model_dump())
+    cam_dict = data.model_dump()
+    cam_dict["name"] = unique_name
+    if not cam_dict.get("rtsp_url"):
+        cam_dict["rtsp_url"] = cam_dict.get("detect_stream_url") or "sample.mp4"
+
+    cam = Camera(**cam_dict)
     db.add(cam)
     await db.commit()
     await db.refresh(cam)
 
     # Start live streamer worker
-    stream_manager.start_streamer(
-        camera_id=cam.id,
-        camera_name=cam.name,
-        stream_url=cam.rtsp_url,
-        stream_type=cam.stream_type.value,
-        target_fps=cam.target_fps,
-        is_night_mode=bool(cam.night_mode_enabled),
-        anpr_enabled=bool(cam.anpr_enabled)
-    )
+    try:
+        stream_type_val = cam.stream_type.value if hasattr(cam.stream_type, 'value') else str(cam.stream_type)
+        stream_manager.start_streamer(
+            camera_id=cam.id,
+            camera_name=cam.name,
+            stream_url=cam.rtsp_url,
+            stream_type=stream_type_val,
+            target_fps=cam.target_fps,
+            is_night_mode=bool(cam.night_mode_enabled),
+            anpr_enabled=bool(cam.anpr_enabled)
+        )
+    except Exception as e:
+        pass
 
     try:
         audit = AuditLog(

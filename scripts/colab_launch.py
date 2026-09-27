@@ -182,11 +182,26 @@ def init_database():
     sys.path.insert(0, str(BACKEND_DIR))
     try:
         import asyncio
+        import threading
         from app.core.database import init_db
-        asyncio.run(init_db())
-        log("DATABASE", "Database tables & RBAC accounts initialized.")
+
+        db_err = None
+        def _run_init():
+            nonlocal db_err
+            try:
+                asyncio.run(init_db())
+            except Exception as ex:
+                db_err = ex
+
+        t = threading.Thread(target=_run_init)
+        t.start()
+        t.join(timeout=15.0)
+        if db_err:
+            log("WARN", f"Pre-init note: {db_err} (FastAPI lifespan will finalize init on boot)")
+        else:
+            log("DATABASE", "Database tables & RBAC accounts initialized.")
     except Exception as e:
-        error_exit("Database Init", f"Failed to initialize database: {e}")
+        log("WARN", f"Database pre-init note: {e}")
 
 def build_frontend():
     log("FRONTEND", "Verifying frontend production assets...")

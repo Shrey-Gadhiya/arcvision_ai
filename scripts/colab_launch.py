@@ -288,20 +288,7 @@ def start_tunnels() -> Dict[str, str]:
     cf_bin = shutil.which("cloudflared") or ("/usr/local/bin/cloudflared" if os.path.exists("/usr/local/bin/cloudflared") else None) or ("/tmp/cloudflared" if os.path.exists("/tmp/cloudflared") else None)
     npm_cmd = shutil.which("npx") or shutil.which("npm")
 
-    # 1. Start Pinggy Tunnel (Port 443 SSH SSL)
-    if ssh_bin:
-        try:
-            log("TUNNEL", "Starting Pinggy Tunnel (SSH Port 443)...")
-            with open(PINGGY_LOG, "w") as out:
-                pinggy_process = subprocess.Popen(
-                    [ssh_bin, "-p", "443", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-R0:localhost:8000", "a.pinggy.io"],
-                    stdout=out,
-                    stderr=subprocess.STDOUT
-                )
-        except Exception as e:
-            log("WARN", f"Pinggy launch failed: {e}")
-
-    # 2. Start Cloudflare Tunnel
+    # 1. Start Cloudflare Tunnel (Highest Reliability for Video & Streaming)
     if cf_bin:
         try:
             log("TUNNEL", "Starting Cloudflare Tunnel...")
@@ -314,13 +301,26 @@ def start_tunnels() -> Dict[str, str]:
         except Exception as e:
             log("WARN", f"Cloudflare launch failed: {e}")
 
+    # 2. Start Pinggy Tunnel (Port 443 SSH SSL)
+    if ssh_bin:
+        try:
+            log("TUNNEL", "Starting Pinggy Tunnel (SSH Port 443)...")
+            with open(PINGGY_LOG, "w") as out:
+                pinggy_process = subprocess.Popen(
+                    [ssh_bin, "-p", "443", "-o", "StrictHostKeyChecking=no", "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-R0:127.0.0.1:8000", "a.pinggy.io"],
+                    stdout=out,
+                    stderr=subprocess.STDOUT
+                )
+        except Exception as e:
+            log("WARN", f"Pinggy launch failed: {e}")
+
     # 3. Start Localhost.run Tunnel (SSH)
     if ssh_bin:
         try:
             log("TUNNEL", "Starting Localhost.run Tunnel (SSH)...")
             with open(LHR_LOG, "w") as out:
                 lhr_process = subprocess.Popen(
-                    [ssh_bin, "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30", "-R", "80:localhost:8000", "nokey@localhost.run"],
+                    [ssh_bin, "-o", "StrictHostKeyChecking=no", "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-R", "80:127.0.0.1:8000", "nokey@localhost.run"],
                     stdout=out,
                     stderr=subprocess.STDOUT
                 )
@@ -502,12 +502,55 @@ def print_banner(urls: Dict[str, str], use_cuda: bool):
         pass
 
 def run_watchdog():
+    global backend_process, cf_tunnel_process, pinggy_process, lhr_process
+    ssh_bin = shutil.which("ssh")
+    cf_bin = shutil.which("cloudflared") or ("/usr/local/bin/cloudflared" if os.path.exists("/usr/local/bin/cloudflared") else None) or ("/tmp/cloudflared" if os.path.exists("/tmp/cloudflared") else None)
+
     while not shutdown_requested:
         time.sleep(10)
-        # Check backend
+        # 1. Check backend
         if backend_process and backend_process.poll() is not None:
             log("WATCHDOG", "Backend stopped! Relaunching...")
             start_backend_service(check_gpu())
+
+        # 2. Check Cloudflare Tunnel
+        if cf_bin and cf_tunnel_process and cf_tunnel_process.poll() is not None:
+            log("WATCHDOG", "Cloudflare tunnel exited! Auto-restarting...")
+            try:
+                with open(CF_TUNNEL_LOG, "a") as out:
+                    cf_tunnel_process = subprocess.Popen(
+                        [cf_bin, "tunnel", "--url", "http://127.0.0.1:8000", "--no-autoupdate"],
+                        stdout=out,
+                        stderr=subprocess.STDOUT
+                    )
+            except Exception as e:
+                log("WATCHDOG", f"Cloudflare auto-restart note: {e}")
+
+        # 3. Check Localhost.run Tunnel (SSH)
+        if ssh_bin and lhr_process and lhr_process.poll() is not None:
+            log("WATCHDOG", "Localhost.run SSH tunnel dropped! Auto-reconnecting...")
+            try:
+                with open(LHR_LOG, "a") as out:
+                    lhr_process = subprocess.Popen(
+                        [ssh_bin, "-o", "StrictHostKeyChecking=no", "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-R", "80:127.0.0.1:8000", "nokey@localhost.run"],
+                        stdout=out,
+                        stderr=subprocess.STDOUT
+                    )
+            except Exception as e:
+                log("WATCHDOG", f"Localhost.run reconnect note: {e}")
+
+        # 4. Check Pinggy Tunnel (SSH)
+        if ssh_bin and pinggy_process and pinggy_process.poll() is not None:
+            log("WATCHDOG", "Pinggy SSH tunnel dropped! Auto-reconnecting...")
+            try:
+                with open(PINGGY_LOG, "a") as out:
+                    pinggy_process = subprocess.Popen(
+                        [ssh_bin, "-p", "443", "-o", "StrictHostKeyChecking=no", "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-R0:127.0.0.1:8000", "a.pinggy.io"],
+                        stdout=out,
+                        stderr=subprocess.STDOUT
+                    )
+            except Exception as e:
+                log("WATCHDOG", f"Pinggy reconnect note: {e}")
 
 def main():
     print("\n" + "=" * 80)

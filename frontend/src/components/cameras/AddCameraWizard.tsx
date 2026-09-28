@@ -227,8 +227,9 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
       onClose();
     } catch (err: any) {
       console.error('Failed to save camera:', err);
-      let errorMsg = 'Failed to save camera.';
-      if (err.response?.data?.detail) {
+      if (err.response?.status === 503 || err.message?.includes('503')) {
+        errorMsg = 'Tunnel connection dropped (503 Service Unavailable). If running on Colab/Cloud, please switch to the Cloudflare link (*.trycloudflare.com) or Pinggy link.';
+      } else if (err.response?.data?.detail) {
         if (typeof err.response.data.detail === 'string') {
           errorMsg = err.response.data.detail;
         } else if (Array.isArray(err.response.data.detail)) {

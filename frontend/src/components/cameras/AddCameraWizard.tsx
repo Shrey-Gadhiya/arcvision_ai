@@ -46,10 +46,12 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
     const totalSizeMB = (file.size / (1024 * 1024)).toFixed(1);
     setUploadStatusText(`Preparing high-speed chunked upload for ${file.name} (${totalSizeMB} MB)...`);
 
-    const CHUNK_SIZE = 512 * 1024; // 512 KB per chunk to guarantee zero timeouts over reverse tunnels
+    // Optimal chunk size: 4 MB for files > 10MB to cut HTTP roundtrips by 8x over cloud tunnels
+    const CHUNK_SIZE = file.size > 10 * 1024 * 1024 ? 4 * 1024 * 1024 : 1024 * 1024;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const uploadId = `up_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const token = localStorage.getItem('arc_token');
+    const uploadStartTime = Date.now();
 
     let completedSuccessfully = false;
     let finalPath = '';
@@ -87,8 +89,10 @@ export const AddCameraWizard: React.FC<AddCameraWizardProps> = ({ isOpen, onClos
 
             const percent = Math.min(100, Math.round(((i + 1) / totalChunks) * 100));
             const currentMB = ((end) / (1024 * 1024)).toFixed(1);
+            const elapsedSec = (Date.now() - uploadStartTime) / 1000;
+            const speedMBs = elapsedSec > 0 ? ((end) / (1024 * 1024) / elapsedSec).toFixed(1) : '0';
             setUploadProgress(percent);
-            setUploadStatusText(`Uploading: ${percent}% (${currentMB} / ${totalSizeMB} MB) • Chunk ${i + 1}/${totalChunks}`);
+            setUploadStatusText(`Uploading: ${percent}% (${currentMB} / ${totalSizeMB} MB • ${speedMBs} MB/s) • Chunk ${i + 1}/${totalChunks}`);
 
             if (i === totalChunks - 1) {
               finalPath = data.file_path || data.relative_path || data.filename;

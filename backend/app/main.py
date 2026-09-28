@@ -49,6 +49,18 @@ logger = logging.getLogger("arc_vision.main")
 async def lifespan(app: FastAPI):
     # --- STARTUP ---
     logger.info("Initializing ARC VISION Tactical Surveillance Core...")
+
+    # Optimize thread counts for mid-level CPU architectures (prevents CPU thread thrashing)
+    import os, cv2
+    cpu_threads = max(1, min(4, (os.cpu_count() or 4) // 2 or 2))
+    cv2.setNumThreads(cpu_threads)
+    try:
+        import torch
+        torch.set_num_threads(cpu_threads)
+        logger.info(f"Configured balanced CPU execution: {cpu_threads} worker threads per neural op.")
+    except Exception:
+        pass
+
     await init_db()
     stream_manager.set_main_loop(asyncio.get_running_loop())
 

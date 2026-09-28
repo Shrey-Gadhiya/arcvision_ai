@@ -98,6 +98,10 @@ class CameraStreamer:
         self._ai_worker_thread: Optional[threading.Thread] = None
         self._inference_queue: queue.Queue = queue.Queue(maxsize=1)
         self._last_clip_time = 0.0
+        self._is_face_processing = False
+        self._last_client_request_time = 0.0
+        self._last_jpeg_encode_time = 0.0
+        self._cached_jpeg_frame_num = -1
         self._lock = threading.Lock()
 
     def set_main_loop(self, loop: asyncio.AbstractEventLoop):
@@ -769,27 +773,43 @@ class CameraStreamer:
             active_zones_map = {}
             evidence_package = {}
 
-            # 2b. Live Face Detection & Unique Person ID Tracking (Async)
-            person_trks = [{"track_id": d.track_id, "box": d.box} for d in tracked if d.class_name in ["person", "human", "pedestrian"]]
-            if person_trks and (frame_num % 2 == 0):
+            # 2b. Live Face Detection & Unique Person ID Tracking (Async & Deduplicated)
+            now_ts = time.time()
+            active_person_trks = []
+            for d in tracked:
+                if d.class_name in ["person", "human", "pedestrian"]:
+                    cached = self._person_face_cache.get(d.track_id)
+                    # Needs recognition if never processed or if unknown and 3.5+ seconds elapsed
+                    if not cached or (not cached.get("is_matched") and (now_ts - cached.get("last_processed", 0.0) > 3.5)):
+                        active_person_trks.append({"track_id": d.track_id, "box": d.box})
+
+            if active_person_trks and (frame_num % 3 == 0) and not self._is_face_processing:
+                self._is_face_processing = True
                 async def _async_face_proc(f_copy, p_trks):
-                    evs = await face_service.process_frame_faces(
-                        camera_id=self.camera_id,
-                        camera_name=self.camera_name,
-                        frame=f_copy,
-                        person_tracks=p_trks
-                    )
-                    if evs:
-                        with self._lock:
-                            for ev in evs:
-                                t_id = ev.get("track_id")
-                                if t_id:
-                                    self._person_face_cache[t_id] = {
-                                        "unique_person_id": ev.get("unique_person_id"),
-                                        "face_name": ev.get("identity_name"),
-                                        "is_matched": ev.get("match_status") == "KNOWN"
-                                    }
-                self._dispatch_task(_async_face_proc(frame.copy(), person_trks))
+                    try:
+                        evs = await face_service.process_frame_faces(
+                            camera_id=self.camera_id,
+                            camera_name=self.camera_name,
+                            frame=f_copy,
+                            person_tracks=p_trks
+                        )
+                        if evs:
+                            with self._lock:
+                                now_f = time.time()
+                                for ev in evs:
+                                    t_id = ev.get("track_id")
+                                    if t_id:
+                                        self._person_face_cache[t_id] = {
+                                            "unique_person_id": ev.get("unique_person_id"),
+                                            "face_name": ev.get("identity_name"),
+                                            "is_matched": ev.get("match_status") == "KNOWN",
+                                            "last_processed": now_f
+                                        }
+                    except Exception as err:
+                        logger.debug(f"[Cam #{self.camera_id}] Async face proc: {err}")
+                    finally:
+                        self._is_face_processing = False
+                self._dispatch_task(_async_face_proc(frame, active_person_trks))
 
             # 3. Spatial Rules & High-Precision ANPR License Plate Tracking for all vehicle types
             VEHICLE_TYPES = ["car", "truck", "bus", "motorcycle", "bicycle", "bike", "scooter", "motorbike", "vehicle", "van", "auto", "train"]
@@ -1108,23 +1128,30 @@ class CameraStreamer:
 
                 annotated = self._annotate_frame(frame, current_detections)
 
-                # Downscale preview frame for ultra-fast turbo JPEG encoding & silky smooth MJPEG streaming
-                h_f, w_f = frame.shape[:2]
-                if w_f > 854:
-                    preview_w = 854
-                    preview_h = int(854 * h_f / w_f)
-                    preview_ann = cv2.resize(annotated, (preview_w, preview_h), interpolation=cv2.INTER_LINEAR)
-                else:
-                    preview_ann = annotated
-
-                ret_ann, jpeg_ann = cv2.imencode('.jpg', preview_ann, [cv2.IMWRITE_JPEG_QUALITY, 58])
-
                 with self._lock:
                     self.latest_frame = frame
                     self.latest_annotated_frame = annotated
+
+                # On-Demand Turbo JPEG Encoding:
+                # Only encode preview JPEG if an active client viewer is connected within the last 4.0 seconds
+                # and pace at max 16 FPS (60ms) to leave maximum CPU for AI perception and smooth decoding!
+                now_enc = time.time()
+                has_active_viewer = (now_enc - self._last_client_request_time) < 4.0
+                if has_active_viewer and (now_enc - self._last_jpeg_encode_time) >= 0.060:
+                    self._last_jpeg_encode_time = now_enc
+                    h_f, w_f = frame.shape[:2]
+                    if w_f > 854:
+                        preview_w = 854
+                        preview_h = int(854 * h_f / w_f)
+                        preview_ann = cv2.resize(annotated, (preview_w, preview_h), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        preview_ann = annotated
+
+                    ret_ann, jpeg_ann = cv2.imencode('.jpg', preview_ann, [cv2.IMWRITE_JPEG_QUALITY, 58])
                     if ret_ann:
-                        self.latest_jpeg_bytes = jpeg_ann.tobytes()
-                    self.latest_raw_jpeg_bytes = None
+                        with self._lock:
+                            self.latest_jpeg_bytes = jpeg_ann.tobytes()
+                            self._cached_jpeg_frame_num = self.frame_count
 
                 # 2. Buffer for recording and evidence
                 evidence_manager.buffer_frame(self.camera_id, frame)
@@ -1175,6 +1202,7 @@ class CameraStreamer:
 
     def get_jpeg_bytes(self, annotated: bool = True) -> Optional[bytes]:
         with self._lock:
+            self._last_client_request_time = time.time()
             cached = self.latest_jpeg_bytes if annotated else self.latest_raw_jpeg_bytes
             if cached is not None:
                 return cached
@@ -1188,5 +1216,15 @@ class CameraStreamer:
                 cv2.putText(placeholder, f"STREAM STATUS: {self.status} | INITIALIZING...", (30, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1)
                 ret, jpeg = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 return jpeg.tobytes() if ret else None
+
+            # Fallback on-demand encode
+            h_f, w_f = target.shape[:2]
+            if w_f > 854:
+                preview_w = 854
+                preview_h = int(854 * h_f / w_f)
+                target = cv2.resize(target, (preview_w, preview_h), interpolation=cv2.INTER_LINEAR)
             ret, jpeg = cv2.imencode('.jpg', target, [cv2.IMWRITE_JPEG_QUALITY, 58])
-            return jpeg.tobytes() if ret else None
+            if ret:
+                self.latest_jpeg_bytes = jpeg.tobytes()
+                return self.latest_jpeg_bytes
+            return None

@@ -85,9 +85,9 @@ class PerceptionOrchestrator:
         events: List[Dict[str, Any]] = []
         profile = ai_profile or {}
 
-        # 1. Fall Detection Evaluation (every N frames, default 2)
+        # 1. Fall Detection Evaluation (every N frames, default 3)
         fall_enabled = profile.get("fall_detection", True)
-        fall_interval = profile.get("fall_interval_frames", 2)
+        fall_interval = profile.get("fall_interval_frames", 3)
         if fall_enabled and (frame_idx % fall_interval == 0):
             try:
                 for obj in tracked_objects:
@@ -100,9 +100,9 @@ class PerceptionOrchestrator:
                 logger.error(f"[Fault-Isolation] FallDetector error on Cam #{camera_id}: {e}")
                 self.fall_detector.record_error(str(e))
 
-        # 2. Crowd Density Analytics (every N frames, default 5)
+        # 2. Crowd Density Analytics (every N frames, default 6)
         crowd_enabled = profile.get("crowd_analysis", True)
-        crowd_interval = profile.get("crowd_interval_frames", 5)
+        crowd_interval = profile.get("crowd_interval_frames", 6)
         if crowd_enabled and (frame_idx % crowd_interval == 0) and zones:
             try:
                 crowd_thresh = profile.get("crowd_density_threshold", 8)
@@ -117,9 +117,9 @@ class PerceptionOrchestrator:
                 logger.error(f"[Fault-Isolation] CrowdAnalyzer error on Cam #{camera_id}: {e}")
                 self.crowd_analyzer.record_error(str(e))
 
-        # 3. Fire & Smoke Neural Detection (every N frames, default 5)
+        # 3. Fire & Smoke Neural Detection (every N frames, default 6)
         fire_enabled = profile.get("fire_smoke", True)
-        fire_interval = profile.get("fire_smoke_interval_frames", 5)
+        fire_interval = profile.get("fire_smoke_interval_frames", 6)
         if fire_enabled and (frame_idx % fire_interval == 0) and self.fire_smoke_adapter.is_loaded:
             try:
                 raw_fire_dets = self.fire_smoke_adapter.detect(frame)
@@ -132,9 +132,9 @@ class PerceptionOrchestrator:
                 logger.error(f"[Fault-Isolation] FireSmokeDetector error on Cam #{camera_id}: {e}")
                 self.fire_smoke_adapter.record_error(str(e))
 
-        # 4. Dangerous Object / Weapon Detection (every N frames, default 3)
+        # 4. Dangerous Object / Weapon Detection (every N frames, default 4)
         weapon_enabled = profile.get("weapon_detection", True)
-        weapon_interval = profile.get("weapon_interval_frames", 3)
+        weapon_interval = profile.get("weapon_interval_frames", 4)
         if weapon_enabled and (frame_idx % weapon_interval == 0):
             try:
                 # Check for weapons or weapon classes in tracked objects
@@ -163,9 +163,9 @@ class PerceptionOrchestrator:
                 logger.error(f"[Fault-Isolation] WeaponDetector error on Cam #{camera_id}: {e}")
                 self.weapon_adapter.record_error(str(e))
 
-        # 5. Drone & Aerial Threat Detection (every N frames, default 2)
+        # 5. Drone & Aerial Threat Detection (every N frames, default 3)
         drone_enabled = profile.get("drone_detection", True)
-        drone_interval = profile.get("drone_interval_frames", 2)
+        drone_interval = profile.get("drone_interval_frames", 3)
         if drone_enabled and (frame_idx % drone_interval == 0):
             try:
                 from app.services.ai.perception.drone_adapter import drone_detector
@@ -174,9 +174,9 @@ class PerceptionOrchestrator:
             except Exception as e:
                 logger.error(f"[Fault-Isolation] DroneDetector error on Cam #{camera_id}: {e}")
 
-        # 6. Face Concealment & Masking Detection (every N frames, default 3)
+        # 6. Face Concealment & Masking Detection (every N frames, default 4)
         face_concealment_enabled = profile.get("face_concealment", True)
-        concealment_interval = profile.get("concealment_interval_frames", 3)
+        concealment_interval = profile.get("concealment_interval_frames", 4)
         if face_concealment_enabled and (frame_idx % concealment_interval == 0):
             try:
                 from app.services.ai.face.face_concealment_detector import face_concealment_detector

@@ -69,7 +69,7 @@ class CameraSegmentBuffer:
                 scale_h = int(1920 * h / w)
                 rec_frame = cv2.resize(frame, (scale_w, scale_h))
             else:
-                rec_frame = frame.copy()
+                rec_frame = frame
 
             self.frames.append(rec_frame)
             if has_objects:
@@ -127,21 +127,13 @@ class CameraSegmentBuffer:
         file_path = cam_dir / filename
         rel_path = f"/recordings/cam_{self.camera_id}/{date_str}/{filename}"
 
-        # Write MP4
         first_frame = frames_to_write[0]
         h, w = first_frame.shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(file_path), fourcc, self.fps, (w, h))
-        for f in frames_to_write:
-            out.write(f)
-        out.release()
-
-        file_size = file_path.stat().st_size if file_path.exists() else 0
-        sha_hash = compute_sha256(file_path) if file_path.exists() else ""
 
         start_dt = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
         end_dt = datetime.fromtimestamp(end_epoch, tz=timezone.utc)
 
+        # Defer disk VideoWriter encoding to background thread to ensure zero streaming thread lag
         return {
             "camera_id": self.camera_id,
             "start_time": start_dt,
@@ -149,15 +141,18 @@ class CameraSegmentBuffer:
             "duration_sec": duration,
             "file_path": rel_path,
             "absolute_path": str(file_path),
-            "file_size_bytes": file_size,
+            "file_size_bytes": 0,
             "segment_type": seg_type,
             "motion_score": motion,
             "has_objects": has_objs,
             "objects_detected_json": json.dumps(classes_detected),
-            "sha256_hash": sha_hash,
+            "sha256_hash": "",
             "codec": "H.264 / MP4",
             "resolution": f"{w}x{h}",
-            "is_protected": False
+            "is_protected": False,
+            "_frames": frames_to_write,
+            "_fps": self.fps,
+            "_file_path": file_path
         }
 
 class RecordingEngine:

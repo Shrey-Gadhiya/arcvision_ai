@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Layers, Maximize2, Camera as CameraIcon, Grid, Trash2 } from 'lucide-react';
 import { Camera } from '../types';
 import { API_BASE_URL } from '../api/client';
@@ -16,6 +16,13 @@ export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera, onO
   const [layout, setLayout] = useState<GridLayout>('2x2');
   const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [showOverlays, setShowOverlays] = useState<boolean>(true);
+  const [isTabVisible, setIsTabVisible] = useState<boolean>(!document.hidden);
+
+  useEffect(() => {
+    const handleVis = () => setIsTabVisible(!document.hidden);
+    document.addEventListener('visibilitychange', handleVis);
+    return () => document.removeEventListener('visibilitychange', handleVis);
+  }, []);
 
   const groups = ['ALL', ...Array.from(new Set(cameras.map(c => c.group_name)))];
 
@@ -124,19 +131,26 @@ export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera, onO
               </div>
             </div>
 
-            {/* Live Video Feed */}
-            <div className="flex-1 bg-black relative flex items-center justify-center min-h-[220px]">
-              <img
-                src={`${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15`}
-                alt={cam.name}
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  setTimeout(() => {
-                    target.src = `${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15&t=${Date.now()}`;
-                  }, 2000);
-                }}
-              />
+            {/* Live Video Feed (GPU-Accelerated & Background-Suspended) */}
+            <div className="flex-1 bg-black relative flex items-center justify-center min-h-[220px] overflow-hidden [transform:translateZ(0)]">
+              {isTabVisible ? (
+                <img
+                  src={`${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15`}
+                  alt={cam.name}
+                  className="w-full h-full object-contain [will-change:transform]"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    setTimeout(() => {
+                      target.src = `${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15&t=${Date.now()}`;
+                    }, 2000);
+                  }}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center gap-1.5 text-zinc-500 font-mono text-xs">
+                  <CameraIcon className="w-5 h-5 text-zinc-600" />
+                  <span>Stream Paused (Background)</span>
+                </div>
+              )}
 
               {/* Minimal bottom metadata bar */}
               <div className="absolute bottom-1.5 left-2 text-[10px] font-mono text-zinc-300 bg-black/80 px-1.5 py-0.5 rounded border border-white/10">

@@ -2,12 +2,19 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, and_, desc, func
+from sqlalchemy import select, and_, desc, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.snapshot import TrackedSnapshot
 from app.models.camera import Camera
+from app.models.user import User
+from app.models.audit import AuditLog
+from app.api.v1.auth import get_current_user
+from app.services.stream_manager import stream_manager
+from app.services.snapshot_manager import snapshot_manager
+from app.services.analytics.cross_camera.global_track_manager import global_track_manager
+from app.core.event_bus import event_bus
 
 router = APIRouter(prefix="/snapshots", tags=["Tracked Object Snapshots"])
 
@@ -20,7 +27,8 @@ async def list_snapshots(
     end_time: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Queries tracked object best-frame snapshots with flexible categorization."""
     stmt = select(TrackedSnapshot).order_by(desc(TrackedSnapshot.timestamp))
@@ -115,7 +123,11 @@ async def list_snapshots(
     }
 
 @router.get("/{snapshot_id}")
-async def get_snapshot(snapshot_id: int, db: AsyncSession = Depends(get_db)):
+async def get_snapshot(
+    snapshot_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Returns details of a single tracked object snapshot."""
     stmt = select(TrackedSnapshot).where(TrackedSnapshot.id == snapshot_id)
     res = await db.execute(stmt)
@@ -180,3 +192,69 @@ async def get_recent_snapshot_feed(
             "timestamp": snap.timestamp.isoformat()
         })
     return {"feed": feed}
+
+@router.post("/clear-all")
+async def clear_all_tracked_objects(
+    camera_id: Optional[int] = None,
+    delete_snapshots: bool = True,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Tactical Purge: Flushes in-memory tracking IDs, Kalman states, and visual bounding boxes
+    across active camera streamers, flushes candidate tracks, clears global tracks,
+    and removes tracked object snapshots from the forensic database.
+    """
+    streamers_reset = stream_manager.clear_all_tracked_objects(camera_id)
+    snapshot_manager.clear_all_tracks(camera_id)
+    global_track_manager.clear_active_tracks()
+
+    deleted_count = 0
+    if delete_snapshots:
+        del_stmt = delete(TrackedSnapshot)
+        if camera_id is not None:
+            del_stmt = del_stmt.where(TrackedSnapshot.camera_id == camera_id)
+        res = await db.execute(del_stmt)
+        deleted_count = res.rowcount if hasattr(res, "rowcount") else 0
+        await db.commit()
+
+    # Log audit trail for security accountability
+    try:
+        audit = AuditLog(
+            username=current_user.username,
+            user_role=current_user.role.value,
+            action="PURGE_TRACKED_OBJECTS",
+            resource_type="TRACKER",
+            resource_id=str(camera_id) if camera_id else "ALL_CAMERAS",
+            details_json=json.dumps({
+                "streamers_reset": streamers_reset,
+                "deleted_snapshots": deleted_count,
+                "camera_id": camera_id,
+                "status": "SUCCESS"
+            })
+        )
+        db.add(audit)
+        await db.commit()
+    except Exception:
+        pass
+
+    # Publish real-time event to all connected UI clients via WebSocket
+    try:
+        await event_bus.publish("tracked_objects:cleared", {
+            "camera_id": camera_id,
+            "purged_by": current_user.username,
+            "streamers_reset": streamers_reset,
+            "deleted_snapshots": deleted_count,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully purged all tracked objects{' for camera #' + str(camera_id) if camera_id else ' across all cameras'}.",
+        "streamers_reset": streamers_reset,
+        "deleted_snapshots": deleted_count,
+        "purged_by": current_user.username
+    }
+

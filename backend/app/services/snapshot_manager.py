@@ -36,6 +36,14 @@ class SnapshotManager:
         # camera_id -> { track_id: TrackState }
         self.camera_tracks: Dict[int, Dict[int, TrackState]] = {}
 
+    def clear_all_tracks(self, camera_id: Optional[int] = None):
+        """Flushes in-memory tracked snapshot candidate states."""
+        if camera_id is not None:
+            self.camera_tracks.pop(camera_id, None)
+        else:
+            self.camera_tracks.clear()
+        logger.info(f"SnapshotManager cleared candidate tracks (camera_id={camera_id}).")
+
     def _calculate_quality_score(self, frame: np.ndarray, box: List[float], confidence: float) -> float:
         """
         Calculates representative frame score based on:

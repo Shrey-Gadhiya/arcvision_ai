@@ -125,6 +125,24 @@ class CameraStreamer:
                 logger.debug(f"[Background Task] Cam #{self.camera_id} exception: {e}")
         threading.Thread(target=lambda: asyncio.run(_safe_runner()), daemon=True).start()
 
+    def clear_tracked_objects(self):
+        """Immediately flushes all active tracked objects, detections, and visual overlays."""
+        with self._lock:
+            self.tracker.reset()
+            self.latest_detections.clear()
+            self._vehicle_plate_cache.clear()
+            self._person_face_cache.clear()
+            self._zone_person_evidence_cache.clear()
+            self._in_flight_ocr_tracks.clear()
+            if self.latest_frame is not None:
+                self.latest_annotated_frame = self.latest_frame.copy()
+                try:
+                    _, buf = cv2.imencode('.jpg', self.latest_annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                    self.latest_jpeg_bytes = buf.tobytes()
+                except Exception:
+                    pass
+        logger.info(f"[Cam #{self.camera_id}] All active tracked objects successfully cleared.")
+
     def _async_write_segment(self, seg_meta: Dict[str, Any]):
         """Background thread worker to write MP4 and persist segment to database."""
         try:
@@ -969,9 +987,9 @@ class CameraStreamer:
                 if obs_list:
                     self._dispatch_task(self._ingest_cross_camera_task(obs_list))
 
-            # 7. Automatic Tracked Object Snapshot Capture for Review Stream
-            if tracked and (frame_num % 3 == 0):
-                annotated_f = self._annotate_frame(frame.copy(), tracked)
+            # 7. Automatic Tracked Object Snapshot Capture for Review Stream (Throttled for zero I/O lag)
+            if tracked and (frame_num % 12 == 0):
+                annotated_f = self._annotate_frame(frame, tracked)
                 new_snaps = snapshot_manager.process_frame_detections(
                     camera_id=self.camera_id,
                     clean_frame=frame,
@@ -1092,14 +1110,14 @@ class CameraStreamer:
 
                 # Downscale preview frame for ultra-fast turbo JPEG encoding & silky smooth MJPEG streaming
                 h_f, w_f = frame.shape[:2]
-                if w_f > 960:
-                    preview_w = 960
-                    preview_h = int(960 * h_f / w_f)
+                if w_f > 854:
+                    preview_w = 854
+                    preview_h = int(854 * h_f / w_f)
                     preview_ann = cv2.resize(annotated, (preview_w, preview_h), interpolation=cv2.INTER_LINEAR)
                 else:
                     preview_ann = annotated
 
-                ret_ann, jpeg_ann = cv2.imencode('.jpg', preview_ann, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                ret_ann, jpeg_ann = cv2.imencode('.jpg', preview_ann, [cv2.IMWRITE_JPEG_QUALITY, 58])
 
                 with self._lock:
                     self.latest_frame = frame
@@ -1163,13 +1181,12 @@ class CameraStreamer:
             
             target = self.latest_annotated_frame if annotated else self.latest_frame
             if target is None:
-                placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
-                cv2.rectangle(placeholder, (20, 20), (1260, 700), (45, 55, 75), 1)
-                cv2.putText(placeholder, f"ARC VISION TACTICAL NVR | CAMERA #{self.camera_id}", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
-                cv2.putText(placeholder, f"{self.camera_name.upper()}", (40, 330), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-                cv2.putText(placeholder, f"STREAM STATUS: {self.status} | INITIALIZING AI INGESTION...", (40, 375), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 215, 255), 2)
-                cv2.putText(placeholder, f"SOURCE: {self.stream_url}", (40, 415), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 160, 180), 1)
-                ret, jpeg = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                placeholder = np.zeros((480, 854, 3), dtype=np.uint8)
+                cv2.rectangle(placeholder, (10, 10), (844, 470), (45, 55, 75), 1)
+                cv2.putText(placeholder, f"ARC VISION TACTICAL NVR | CAMERA #{self.camera_id}", (30, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 200), 1)
+                cv2.putText(placeholder, f"{self.camera_name.upper()}", (30, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(placeholder, f"STREAM STATUS: {self.status} | INITIALIZING...", (30, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1)
+                ret, jpeg = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 return jpeg.tobytes() if ret else None
-            ret, jpeg = cv2.imencode('.jpg', target, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            ret, jpeg = cv2.imencode('.jpg', target, [cv2.IMWRITE_JPEG_QUALITY, 58])
             return jpeg.tobytes() if ret else None

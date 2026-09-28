@@ -65,6 +65,11 @@ class GlobalTrackManager:
         self.person_reid_adapter.load()
         self.vehicle_reid_adapter.load()
 
+    def clear_active_tracks(self):
+        """Flushes all in-memory cross-camera active tracks."""
+        self._active_tracks.clear()
+        logger.info("GlobalTrackManager active tracks cleared.")
+
     def generate_global_id(self, entity_type: GlobalEntityType) -> str:
         if entity_type == GlobalEntityType.VEHICLE:
             self._vehicle_counter += 1

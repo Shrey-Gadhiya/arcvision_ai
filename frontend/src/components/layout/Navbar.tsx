@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Volume2, VolumeX, RefreshCw, AlertCircle, LogOut, User } from 'lucide-react';
+import { Shield, Volume2, VolumeX, RefreshCw, AlertCircle, LogOut, User, Trash2 } from 'lucide-react';
 
 interface NavbarProps {
   activeThreatCount: number;
@@ -9,6 +9,7 @@ interface NavbarProps {
   currentUser?: string;
   currentRole?: string;
   onLogout?: () => void;
+  onOpenPurgeModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,6 +20,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   currentRole,
   onLogout,
+  onOpenPurgeModal,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
 
@@ -87,6 +89,18 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           {audioEnabled ? <Volume2 className="w-3.5 h-3.5 text-white" /> : <VolumeX className="w-3.5 h-3.5" />}
         </button>
+
+        {/* Purge / Remove All Tracked Objects */}
+        {onOpenPurgeModal && (
+          <button
+            onClick={onOpenPurgeModal}
+            title="Purge / Remove All Tracked Objects"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-red-950/40 hover:bg-red-900/60 border border-red-800/80 hover:border-red-600 text-red-300 hover:text-white text-xs font-semibold transition-all shadow-sm cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            <span className="hidden sm:inline">Purge Tracks</span>
+          </button>
+        )}
 
         {/* Logged-in user */}
         {currentUser && (

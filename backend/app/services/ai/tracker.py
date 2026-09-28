@@ -128,6 +128,11 @@ class MultiObjectTracker:
         self.tracks: Dict[int, TrackedObject] = {}
         self._next_id = 1
 
+    def reset(self):
+        """Flushes all active tracks and resets the track ID sequence."""
+        self.tracks.clear()
+        self._next_id = 1
+
     def update(self, detections: List[Detection]) -> List[Detection]:
         # Increment missed frames for existing tracks
         for track in self.tracks.values():

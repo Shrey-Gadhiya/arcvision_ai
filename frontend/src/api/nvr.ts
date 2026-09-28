@@ -120,5 +120,16 @@ export const nvrApi = {
     const res = await apiClient.get('/snapshots/recent/feed', { params });
     return res.data;
   },
+
+  async clearAllTrackedObjects(params?: { cameraId?: number; deleteSnapshots?: boolean }) {
+    const res = await apiClient.post('/snapshots/clear-all', null, {
+      params: {
+        camera_id: params?.cameraId,
+        delete_snapshots: params?.deleteSnapshots ?? true
+      }
+    });
+    return res.data;
+  },
 };
+
 

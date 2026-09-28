@@ -28,14 +28,17 @@ Thumbs.db
 *.log
 
 # Large media & model weights
-*.mp4
-*.avi
-*.mkv
 *.pt
+*.onnx
+*.bin
+*.part
 backend/data/
 backend/recordings/
 backend/uploads/
 backend/snapshots/
+backend/evidence/
 data/
 recordings/
 uploads/
+evidence/
+snapshots/

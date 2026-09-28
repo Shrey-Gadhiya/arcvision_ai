@@ -74,6 +74,21 @@ class StreamManager:
     def get_all_streamers(self) -> Dict[int, CameraStreamer]:
         return dict(self._streamers)
 
+    def clear_all_tracked_objects(self, camera_id: Optional[int] = None) -> int:
+        """Flushes active tracked objects across one or all active camera streamers."""
+        cleared_count = 0
+        if camera_id is not None:
+            streamer = self._streamers.get(camera_id)
+            if streamer:
+                streamer.clear_tracked_objects()
+                cleared_count += 1
+        else:
+            for streamer in self._streamers.values():
+                streamer.clear_tracked_objects()
+                cleared_count += 1
+        logger.info(f"StreamManager cleared tracked objects on {cleared_count} camera streamer(s).")
+        return cleared_count
+
     def get_system_health(self) -> Dict[str, Any]:
         """Collects CPU, RAM, Disk, and Camera Stream health metrics."""
         cpu_pct = psutil.cpu_percent(interval=None)

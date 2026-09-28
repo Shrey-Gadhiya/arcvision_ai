@@ -12,13 +12,15 @@ import {
   Bike,
   Truck,
   Tag,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 import { Camera, TrackedSnapshot } from '../types';
 import { nvrApi } from '../api/nvr';
 import { API_BASE_URL, wsManager } from '../api/client';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
+import { PurgeTrackedModal } from '../components/common/PurgeTrackedModal';
 
 interface ReviewStreamProps {
   cameras: Camera[];
@@ -35,6 +37,7 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
   const [imageFit, setImageFit] = useState<'contain' | 'cover'>('contain');
   const [selectedModalSnap, setSelectedModalSnap] = useState<TrackedSnapshot | null>(null);
   const [modalViewMode, setModalViewMode] = useState<'crop' | 'annotated' | 'clean'>('crop');
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState<boolean>(false);
   const [categories, setCategories] = useState<{
     all: number;
     person: number;
@@ -243,6 +246,15 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
             <RefreshCw className="w-3 h-3" />
             Refresh
           </Button>
+
+          <button
+            onClick={() => setIsPurgeModalOpen(true)}
+            title="Remove / Purge All Tracked Objects"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-red-950/60 hover:bg-red-900 border border-red-800 hover:border-red-600 text-red-300 hover:text-white text-xs font-semibold transition-all shadow-sm cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            <span>Purge Tracked Objects</span>
+          </button>
         </div>
       </div>
 
@@ -633,6 +645,17 @@ export const ReviewStream: React.FC<ReviewStreamProps> = ({ cameras, onOpenTimel
           </div>
         </div>
       )}
+
+      {/* Purge Tracked Objects Modal */}
+      <PurgeTrackedModal
+        isOpen={isPurgeModalOpen}
+        onClose={() => setIsPurgeModalOpen(false)}
+        cameras={cameras}
+        initialCameraId={selectedCameraId === 'ALL' ? null : selectedCameraId}
+        onPurgeComplete={() => {
+          fetchFeed();
+        }}
+      />
     </div>
   );
 };

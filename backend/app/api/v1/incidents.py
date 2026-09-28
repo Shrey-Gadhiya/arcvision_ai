@@ -20,6 +20,7 @@ from app.schemas.all_schemas import (
     IncidentAddNote,
     EvidenceResponse
 )
+from app.api.v1.auth import get_current_user
 
 router = APIRouter(prefix="/incidents", tags=["Incidents & Threat Lifecycle"])
 
@@ -38,7 +39,8 @@ async def list_incidents(
     severity: Optional[IncidentSeverity] = None,
     camera_id: Optional[int] = None,
     limit: int = Query(50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     query = select(Incident).order_by(desc(Incident.detected_at))
     if status:
@@ -53,7 +55,11 @@ async def list_incidents(
     return result.scalars().all()
 
 @router.get("/{incident_id}", response_model=IncidentResponse)
-async def get_incident(incident_id: int, db: AsyncSession = Depends(get_db)):
+async def get_incident(
+    incident_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     inc = result.scalars().first()
     if not inc:

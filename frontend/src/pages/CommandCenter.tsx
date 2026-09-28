@@ -206,13 +206,13 @@ export const CommandCenter: React.FC<CommandCenterProps> = ({
           <div className="flex-1 bg-black relative flex items-center justify-center overflow-hidden">
             {primaryCam ? (
               <img
-                src={`${API_BASE_URL}/api/v1/streams/${primaryCam.id}/live.mjpg?annotated=true`}
+                src={`${API_BASE_URL}/api/v1/streams/${primaryCam.id}/live.mjpg?annotated=true&fps=18`}
                 alt={primaryCam.name}
                 className="w-full h-full object-contain"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
                   setTimeout(() => {
-                    target.src = `${API_BASE_URL}/api/v1/streams/${primaryCam.id}/live.mjpg?annotated=true&t=${Date.now()}`;
+                    target.src = `${API_BASE_URL}/api/v1/streams/${primaryCam.id}/live.mjpg?annotated=true&fps=18&t=${Date.now()}`;
                   }, 2000);
                 }}
               />

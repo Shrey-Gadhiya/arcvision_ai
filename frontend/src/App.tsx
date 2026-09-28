@@ -24,26 +24,57 @@ import { SystemHealth } from './pages/SystemHealth';
 import { AuditLogs } from './pages/AuditLogs';
 import { Settings } from './pages/Settings';
 import { TacticalMap } from './pages/TacticalMap';
+import { PurgeTrackedModal } from './components/common/PurgeTrackedModal';
 
 import { Camera, Incident } from './types';
 import { apiClient, wsManager } from './api/client';
 
 export const App: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(
-    !!localStorage.getItem('arc_token')
-  );
-  const [currentUser, setCurrentUser] = useState<string>(
-    localStorage.getItem('arc_user') || ''
-  );
-  const [currentRole, setCurrentRole] = useState<string>(
-    localStorage.getItem('arc_role') || ''
-  );
+  const [isVerifyingAuth, setIsVerifyingAuth] = useState<boolean>(true);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<string>('');
+  const [currentRole, setCurrentRole] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<PageId>('command');
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<number>(1);
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Authenticate & verify token integrity with backend on startup
+  useEffect(() => {
+    const verifyToken = async () => {
+      const token = localStorage.getItem('arc_token');
+      if (!token) {
+        setIsAuthenticated(false);
+        setIsVerifyingAuth(false);
+        return;
+      }
+
+      try {
+        const res = await apiClient.get('/auth/me');
+        setIsAuthenticated(true);
+        setCurrentUser(res.data.username);
+        setCurrentRole(res.data.role);
+        localStorage.setItem('arc_user', res.data.username);
+        localStorage.setItem('arc_role', res.data.role);
+      } catch (err) {
+        // Token invalid, expired, or tampered
+        localStorage.removeItem('arc_token');
+        localStorage.removeItem('arc_user');
+        localStorage.removeItem('arc_role');
+        setIsAuthenticated(false);
+        setCurrentUser('');
+        setCurrentRole('');
+      } finally {
+        setIsVerifyingAuth(false);
+      }
+    };
+
+    verifyToken();
+  }, []);
 
   const handleLogin = (token: string, username: string, role: string) => {
     setIsAuthenticated(true);
@@ -51,7 +82,12 @@ export const App: React.FC = () => {
     setCurrentRole(role);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await apiClient.post('/auth/logout');
+    } catch (e) {
+      // Ignore network errors on session teardown
+    }
     localStorage.removeItem('arc_token');
     localStorage.removeItem('arc_user');
     localStorage.removeItem('arc_role');
@@ -131,10 +167,18 @@ export const App: React.FC = () => {
       );
     });
 
+    // Subscribe to purge event from any console
+    const unsubPurge = wsManager.on('tracked_objects:cleared', (payload: any) => {
+      setToastMessage(`Tracked objects purged by ${payload?.purged_by || 'operator'}.`);
+      fetchInitialData();
+      setTimeout(() => setToastMessage(null), 4000);
+    });
+
     return () => {
       window.removeEventListener('arc_auth_expired', handleAuthExpired);
       unsubIncident();
       unsubStatus();
+      unsubPurge();
     };
   }, [isAuthenticated, audioEnabled]);
 
@@ -167,13 +211,33 @@ export const App: React.FC = () => {
     (i) => i.severity === 'CRITICAL' && i.status !== 'RESOLVED'
   ).length;
 
+  // Show security verification loader while validating token
+  if (isVerifyingAuth) {
+    return (
+      <div className="min-h-screen bg-[#050507] text-white flex flex-col items-center justify-center p-4">
+        <div className="w-9 h-9 border-2 border-white/20 border-t-white rounded-full animate-spin mb-4" />
+        <p className="text-xs font-mono tracking-widest uppercase text-zinc-400">
+          Verifying Tactical Clearance &amp; Token Validity…
+        </p>
+      </div>
+    );
+  }
+
   // Show login screen if not authenticated
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} />;
   }
 
   return (
-    <div className="min-h-screen bg-[#000000] text-zinc-100 flex flex-col selection:bg-white selection:text-black font-sans">
+    <div className="min-h-screen bg-[#000000] text-zinc-100 flex flex-col selection:bg-white selection:text-black font-sans relative">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div className="absolute top-14 right-4 z-50 bg-zinc-900 border border-emerald-500/80 text-emerald-300 px-4 py-2 rounded-xl text-xs shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Top Header */}
       <Navbar
         activeThreatCount={activeThreats}
@@ -183,6 +247,7 @@ export const App: React.FC = () => {
         currentUser={currentUser}
         currentRole={currentRole}
         onLogout={handleLogout}
+        onOpenPurgeModal={() => setIsPurgeModalOpen(true)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -223,6 +288,7 @@ export const App: React.FC = () => {
                 setSelectedCameraId(id);
                 setCurrentPage('camera_detail');
               }}
+              onOpenPurgeModal={() => setIsPurgeModalOpen(true)}
             />
           )}
 
@@ -341,6 +407,18 @@ export const App: React.FC = () => {
           {currentPage === 'settings' && <Settings />}
         </main>
       </div>
+
+      {/* Global Purge Tracked Objects Modal */}
+      <PurgeTrackedModal
+        isOpen={isPurgeModalOpen}
+        onClose={() => setIsPurgeModalOpen(false)}
+        cameras={cameras}
+        onPurgeComplete={({ streamers_reset, deleted_snapshots }) => {
+          fetchInitialData();
+          setToastMessage(`Purge complete: ${streamers_reset} camera streamer(s) reset, ${deleted_snapshots} snapshot(s) deleted.`);
+          setTimeout(() => setToastMessage(null), 5000);
+        }}
+      />
     </div>
   );
 };

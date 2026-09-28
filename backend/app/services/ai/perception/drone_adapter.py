@@ -27,6 +27,7 @@ class DroneDetectorAdapter(BaseModelAdapter):
             version=version,
             task=PerceptionTask.OPEN_VOCABULARY,
             provider="SkyShield UAV Neural Perception Engine",
+            model_path="models/skyshield_uav_v2.pt",
             device=device,
             input_resolution="640x640",
             supported_classes=["drone", "uav", "quadcopter", "multirotor", "aerial_threat", "fixed_wing_uav"]

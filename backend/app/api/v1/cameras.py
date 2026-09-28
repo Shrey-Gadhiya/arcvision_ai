@@ -28,7 +28,10 @@ from app.api.v1.auth import get_current_user
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
 
 @router.get("/", response_model=List[CameraResponse])
-async def list_cameras(db: AsyncSession = Depends(get_db)):
+async def list_cameras(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     result = await db.execute(select(Camera).order_by(Camera.id))
     cameras = result.scalars().all()
     
@@ -45,7 +48,11 @@ async def list_cameras(db: AsyncSession = Depends(get_db)):
     return cameras
 
 @router.get("/{camera_id}", response_model=CameraResponse)
-async def get_camera(camera_id: int, db: AsyncSession = Depends(get_db)):
+async def get_camera(
+    camera_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     cam = result.scalars().first()
     if not cam:
@@ -60,7 +67,8 @@ async def get_camera(camera_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
 async def create_camera(
     data: CameraCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     base_name = data.name.strip() if data.name and data.name.strip() else f"CAM-{int(time.time()) % 10000}"
     unique_name = base_name
@@ -252,81 +260,95 @@ async def fetch_video_from_url(request: Request):
 @router.post("/upload-video")
 async def upload_camera_video(
     request: Request,
-    file: Optional[UploadFile] = None,
-    video: Optional[UploadFile] = None,
-    upload: Optional[UploadFile] = None
+    file: Optional[UploadFile] = File(None),
+    video: Optional[UploadFile] = File(None),
+    upload: Optional[UploadFile] = File(None)
 ):
     """
     Uploads an MP4 / video file to serve as a custom CCTV camera feed source.
-    Streams directly to disk with 2MB chunk buffer for high-speed uploads.
+    High-reliability single-stream upload with 4MB buffer and Windows-safe file operations.
     """
+    import asyncio
     actual_file = file or video or upload
-    if actual_file is None:
+    raw_name = "uploaded_video.mp4"
+
+    uploads_dir = Path(settings.UPLOADS_DIR)
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = int(time.time())
+
+    if actual_file is not None and hasattr(actual_file, "filename") and actual_file.filename:
+        raw_name = actual_file.filename
+    else:
         try:
             form = await request.form()
             for key in ["file", "video", "upload", "media"]:
-                if key in form and hasattr(form[key], "filename"):
+                if key in form and hasattr(form[key], "filename") and form[key].filename:
                     actual_file = form[key]
+                    raw_name = actual_file.filename
                     break
-            if actual_file is None:
-                for v in form.values():
-                    if hasattr(v, "filename") and v.filename:
-                        actual_file = v
-                        break
         except Exception:
             pass
 
-    # If still None, handle direct binary body stream
-    if actual_file is None or not hasattr(actual_file, "filename") or not actual_file.filename:
-        try:
-            body = await request.body()
-            if body and len(body) > 100:
-                timestamp = int(time.time())
-                safe_name = f"video_{timestamp}_upload.mp4"
-                uploads_dir = Path(settings.UPLOADS_DIR)
-                uploads_dir.mkdir(parents=True, exist_ok=True)
-                target_path = uploads_dir / safe_name
-                with open(target_path, "wb") as f:
-                    f.write(body)
-                rel_path = f"data/uploads/{safe_name}"
-                return {
-                    "status": "SUCCESS",
-                    "filename": safe_name,
-                    "file_path": str(target_path),
-                    "relative_path": rel_path,
-                    "url": f"/uploads/{safe_name}"
-                }
-        except Exception:
-            pass
-        raise HTTPException(status_code=400, detail="No video file provided in multipart upload ('file' field required).")
-
-    raw_name = actual_file.filename or "video.mp4"
     ext = Path(raw_name).suffix.lower()
     allowed_exts = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".3gp", ".wmv", ".mpeg", ".mpg"]
     if ext not in allowed_exts:
         ext = ".mp4"
 
-    clean_basename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(raw_name).stem)[:50]
-    timestamp = int(time.time())
+    clean_basename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', Path(raw_name).stem)[:45]
     safe_name = f"video_{timestamp}_{clean_basename}{ext}"
-    
-    uploads_dir = Path(settings.UPLOADS_DIR)
-    uploads_dir.mkdir(parents=True, exist_ok=True)
     target_path = uploads_dir / safe_name
+    temp_target = uploads_dir / f"tmp_{timestamp}_{clean_basename}.part"
 
     try:
-        with open(target_path, "wb") as buffer:
-            if hasattr(actual_file, "file") and actual_file.file:
-                shutil.copyfileobj(actual_file.file, buffer, length=2 * 1024 * 1024)
-            elif hasattr(actual_file, "read"):
-                chunk = await actual_file.read(2 * 1024 * 1024)
-                while chunk:
-                    buffer.write(chunk)
-                    chunk = await actual_file.read(2 * 1024 * 1024)
+        if actual_file is not None:
+            with open(temp_target, "wb") as buffer:
+                if hasattr(actual_file, "file") and actual_file.file:
+                    shutil.copyfileobj(actual_file.file, buffer, length=4 * 1024 * 1024)
+                elif hasattr(actual_file, "read"):
+                    while chunk := await actual_file.read(4 * 1024 * 1024):
+                        buffer.write(chunk)
+        else:
+            # Direct binary body stream
+            body = await request.body()
+            if not body or len(body) < 100:
+                raise HTTPException(status_code=400, detail="No video file provided.")
+            with open(temp_target, "wb") as f:
+                f.write(body)
+
+        # Windows-safe atomic move with retries to prevent antivirus / indexing lockups
+        moved = False
+        for attempt in range(12):
+            try:
+                if target_path.exists():
+                    target_path.unlink()
+                shutil.move(str(temp_target), str(target_path))
+                moved = True
+                break
+            except (PermissionError, OSError):
+                if attempt < 11:
+                    await asyncio.sleep(0.08)
+                else:
+                    try:
+                        shutil.copy2(str(temp_target), str(target_path))
+                        temp_target.unlink()
+                        moved = True
+                    except Exception:
+                        pass
+
+        if not moved and not target_path.exists():
+            raise HTTPException(status_code=500, detail="Failed to finalize video file on disk.")
+
+    except HTTPException:
+        raise
     except Exception as e:
+        if temp_target.exists():
+            try:
+                temp_target.unlink()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"Failed to write video file: {str(e)}")
     finally:
-        if hasattr(actual_file, "close"):
+        if actual_file is not None and hasattr(actual_file, "close"):
             try:
                 await actual_file.close()
             except Exception:
@@ -344,13 +366,13 @@ async def upload_camera_video(
 @router.post("/upload-chunk")
 async def upload_camera_video_chunk(
     request: Request,
-    file: Optional[UploadFile] = None
+    file: Optional[UploadFile] = File(None)
 ):
     """
     High-reliability chunked upload endpoint.
-    Accepts 512KB - 1MB binary chunks and appends them sequentially to prevent
-    reverse-proxy tunnel timeouts, HTTP payload size limits, or socket drops.
+    Accepts binary chunks and appends with Windows-safe file locking handlers.
     """
+    import asyncio
     query_params = request.query_params
     upload_id = query_params.get("upload_id") or request.headers.get("X-Upload-ID")
     chunk_index = query_params.get("chunk_index")
@@ -381,7 +403,7 @@ async def upload_camera_video_chunk(
 
     if not upload_id:
         upload_id = f"up_{int(time.time())}"
-    
+
     clean_upload_id = re.sub(r'[^a-zA-Z0-9_\-]', '', str(upload_id))[:64]
     uploads_dir = Path(settings.UPLOADS_DIR)
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -393,12 +415,14 @@ async def upload_camera_video_chunk(
     except Exception:
         c_idx, t_chunks = 0, 1
 
-    # If first chunk, reset part file if it exists
+    # If first chunk, reset part file if it exists with retry
     if c_idx == 0 and temp_part_file.exists():
-        try:
-            temp_part_file.unlink()
-        except Exception:
-            pass
+        for _ in range(5):
+            try:
+                temp_part_file.unlink()
+                break
+            except Exception:
+                await asyncio.sleep(0.05)
 
     # Append chunk data to part file
     try:
@@ -421,8 +445,22 @@ async def upload_camera_video_chunk(
         final_path = uploads_dir / final_filename
 
         if temp_part_file.exists():
-            shutil.move(str(temp_part_file), str(final_path))
-        
+            for attempt in range(12):
+                try:
+                    if final_path.exists():
+                        final_path.unlink()
+                    shutil.move(str(temp_part_file), str(final_path))
+                    break
+                except (PermissionError, OSError):
+                    if attempt < 11:
+                        await asyncio.sleep(0.08)
+                    else:
+                        try:
+                            shutil.copy2(str(temp_part_file), str(final_path))
+                            temp_part_file.unlink()
+                        except Exception:
+                            pass
+
         rel_path = f"data/uploads/{final_filename}"
         return {
             "status": "COMPLETED",

@@ -163,7 +163,7 @@ export const PlaybackTimeline: React.FC<PlaybackTimelineProps> = ({
 
   const videoSrc = useMemo(() => {
     if (isLiveMode || !activeSegment) {
-      return `${API_BASE_URL}/api/v1/streams/${selectedCameraId}/live.mjpg?annotated=true`;
+      return `${API_BASE_URL}/api/v1/streams/${selectedCameraId}/live.mjpg?annotated=true&fps=15`;
     }
     return `${API_BASE_URL}${activeSegment.file_path}`;
   }, [isLiveMode, activeSegment, selectedCameraId]);

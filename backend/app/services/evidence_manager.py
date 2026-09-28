@@ -19,10 +19,12 @@ def compute_sha256(file_path: Path | str) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
+from collections import deque
+
 class CameraRingBuffer:
     def __init__(self, max_seconds: int = 12, fps: int = 15):
         self.max_frames = max_seconds * fps
-        self.buffer: List[Tuple[float, np.ndarray]] = [] # [(timestamp, frame)]
+        self.buffer = deque(maxlen=self.max_frames) # [(timestamp, frame)]
 
     def add_frame(self, frame: np.ndarray):
         now = time.time()
@@ -33,10 +35,8 @@ class CameraRingBuffer:
             scale_h = int(960 * h / w)
             buf_f = cv2.resize(frame, (scale_w, scale_h))
         else:
-            buf_f = frame.copy()
+            buf_f = frame
         self.buffer.append((now, buf_f))
-        if len(self.buffer) > self.max_frames:
-            self.buffer.pop(0)
 
     def get_frames(self) -> List[Tuple[float, np.ndarray]]:
         return list(self.buffer)

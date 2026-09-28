@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Maximize2, Camera as CameraIcon, Grid } from 'lucide-react';
+import { Layers, Maximize2, Camera as CameraIcon, Grid, Trash2 } from 'lucide-react';
 import { Camera } from '../types';
 import { API_BASE_URL } from '../api/client';
 import { Badge } from '../components/common/Badge';
@@ -7,11 +7,12 @@ import { Badge } from '../components/common/Badge';
 interface LiveGridProps {
   cameras: Camera[];
   onSelectCamera: (camId: number) => void;
+  onOpenPurgeModal?: () => void;
 }
 
 type GridLayout = '1x1' | '2x2' | '3x3';
 
-export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera }) => {
+export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera, onOpenPurgeModal }) => {
   const [layout, setLayout] = useState<GridLayout>('2x2');
   const [selectedGroup, setSelectedGroup] = useState<string>('ALL');
   const [showOverlays, setShowOverlays] = useState<boolean>(true);
@@ -84,6 +85,17 @@ export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera }) =
             <Layers className="w-3.5 h-3.5" />
             <span>AI HUD</span>
           </button>
+
+          {onOpenPurgeModal && (
+            <button
+              onClick={onOpenPurgeModal}
+              title="Purge / Remove All Tracked Objects"
+              className="px-2.5 py-1 rounded text-xs border border-red-800/80 bg-red-950/40 hover:bg-red-900/60 text-red-300 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Purge Tracks</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -115,13 +127,13 @@ export const LiveGrid: React.FC<LiveGridProps> = ({ cameras, onSelectCamera }) =
             {/* Live Video Feed */}
             <div className="flex-1 bg-black relative flex items-center justify-center min-h-[220px]">
               <img
-                src={`${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}`}
+                src={`${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15`}
                 alt={cam.name}
                 className="w-full h-full object-contain"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
                   setTimeout(() => {
-                    target.src = `${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&t=${Date.now()}`;
+                    target.src = `${API_BASE_URL}/api/v1/streams/${cam.id}/live.mjpg?annotated=${showOverlays}&fps=15&t=${Date.now()}`;
                   }, 2000);
                 }}
               />

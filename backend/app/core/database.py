@@ -10,12 +10,15 @@ engine = create_async_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
 )
 
-# Enable SQLite FK enforcement on every new connection
+# Enable SQLite WAL mode, busy timeout, and FK enforcement on every new connection
 if "sqlite" in settings.DATABASE_URL:
     @event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.close()
 
 AsyncSessionLocal = async_sessionmaker(

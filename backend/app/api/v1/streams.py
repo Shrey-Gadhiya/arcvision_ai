@@ -6,10 +6,10 @@ from app.services.stream_manager import stream_manager
 
 router = APIRouter(prefix="/streams", tags=["Live Streams"])
 
-async def frame_generator(camera_id: int, annotated: bool = True):
+async def frame_generator(camera_id: int, annotated: bool = True, fps: int = 15):
     """
-    Generates standard multipart/x-mixed-replace MJPEG stream frames.
-    Auto-starts the camera streamer if not running and streams placeholder/video frames immediately.
+    Generates standard multipart/x-mixed-replace MJPEG stream frames with zero-lag backpressure management.
+    Auto-starts camera streamer if not running and streams latest available frames.
     """
     streamer = stream_manager.get_streamer(camera_id)
     if not streamer:
@@ -34,31 +34,36 @@ async def frame_generator(camera_id: int, annotated: bool = True):
             pass
 
     last_count = -1
-    fps = max(20, streamer.target_fps if streamer else 25)
+    effective_fps = max(5, min(fps, 30))
+    target_interval = 1.0 / effective_fps
+    last_sent_time = 0.0
 
     try:
-        # If streamer is initializing, stream tactical connecting frames
-        retries = 0
         while streamer and streamer.is_running:
-            curr_count = streamer.frame_count
-            if curr_count != last_count or curr_count == 0:
-                last_count = curr_count
-                jpeg_bytes = streamer.get_jpeg_bytes(annotated=annotated)
-                if jpeg_bytes is not None:
-                    yield (
-                        b'--frame\r\n'
-                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n'
-                    )
-            await asyncio.sleep(0.02)
+            now = time.time()
+            # Enforce frame pacing and anti-lag skipping:
+            # If client or network lags, intermediate frames are skipped, always yielding the LATEST frame!
+            if (now - last_sent_time) >= target_interval:
+                curr_count = streamer.frame_count
+                if curr_count != last_count or curr_count == 0:
+                    last_count = curr_count
+                    last_sent_time = now
+                    jpeg_bytes = streamer.get_jpeg_bytes(annotated=annotated)
+                    if jpeg_bytes is not None:
+                        yield (
+                            b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n'
+                        )
+            await asyncio.sleep(0.01)
     except (asyncio.CancelledError, GeneratorExit):
         pass
     except Exception:
         pass
 
 @router.get("/{camera_id}/live.mjpg")
-async def get_live_mjpeg(camera_id: int, annotated: bool = True):
+async def get_live_mjpeg(camera_id: int, annotated: bool = True, fps: int = 15):
     return StreamingResponse(
-        frame_generator(camera_id, annotated=annotated),
+        frame_generator(camera_id, annotated=annotated, fps=fps),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
@@ -92,3 +97,10 @@ async def get_active_detections(camera_id: int):
         "fps": streamer.current_fps,
         "detections": [d.to_dict() for d in streamer.latest_detections]
     }
+
+@router.post("/clear-tracks")
+async def clear_tracks(camera_id: int = None):
+    """Flushes active multi-object tracker states on camera streams."""
+    cleared = stream_manager.clear_all_tracked_objects(camera_id)
+    return {"status": "SUCCESS", "streamers_cleared": cleared}
+

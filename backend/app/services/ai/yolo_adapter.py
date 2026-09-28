@@ -152,9 +152,10 @@ class YOLODetectorAdapter(BaseDetectorAdapter):
                 "agnostic_nms": True,
                 "iou": 0.45,
                 "device": self.device,
-                "half": is_cuda and (self.precision == "fp16"),
                 "verbose": False
             }
+            if is_cuda and (self.precision == "fp16"):
+                predict_kwargs["half"] = True
             results = self.model(frame, **predict_kwargs)
 
             for r in results:

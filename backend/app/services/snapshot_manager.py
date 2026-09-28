@@ -1,6 +1,8 @@
+import os
 import cv2
 import time
 import json
+import shutil
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +93,14 @@ class SnapshotManager:
         """
         if camera_id not in self.camera_tracks:
             self.camera_tracks[camera_id] = {}
+
+        # Disk safeguard: never write snapshots if host free disk space is critically low (< 1 GB)
+        try:
+            free_bytes = shutil.disk_usage(str(self.snapshots_dir)).free
+            if free_bytes < 1024 * 1024 * 1024:
+                return []
+        except Exception:
+            pass
 
         now = time.time()
         tracks_map = self.camera_tracks[camera_id]

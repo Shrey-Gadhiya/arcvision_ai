@@ -174,11 +174,24 @@ export const App: React.FC = () => {
       setTimeout(() => setToastMessage(null), 4000);
     });
 
+    const unsubDataPurged = wsManager.on('data:purged', (payload: any) => {
+      setToastMessage(payload?.message || 'Surveillance data purged successfully.');
+      fetchInitialData();
+      setTimeout(() => setToastMessage(null), 4000);
+    });
+
+    const unsubCamDeleted = wsManager.on('camera:deleted', (payload: any) => {
+      setCameras((prev) => prev.filter((c) => c.id !== payload.camera_id));
+      fetchInitialData();
+    });
+
     return () => {
       window.removeEventListener('arc_auth_expired', handleAuthExpired);
       unsubIncident();
       unsubStatus();
       unsubPurge();
+      unsubDataPurged();
+      unsubCamDeleted();
     };
   }, [isAuthenticated, audioEnabled]);
 

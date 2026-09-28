@@ -1,6 +1,7 @@
 import os
 import cv2
 import time
+import shutil
 import hashlib
 import json
 import logging
@@ -109,6 +110,14 @@ class CameraSegmentBuffer:
 
         if not frames_to_write:
             return None
+
+        # Safeguard: do not record if host disk space is critically low (< 1 GB)
+        try:
+            free_bytes = shutil.disk_usage(str(self.recordings_dir)).free
+            if free_bytes < 1024 * 1024 * 1024:
+                return None
+        except Exception:
+            pass
 
         # Determine segment type
         if is_event:

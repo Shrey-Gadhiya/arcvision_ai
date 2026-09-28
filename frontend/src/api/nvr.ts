@@ -130,6 +130,27 @@ export const nvrApi = {
     });
     return res.data;
   },
+
+  async purgeAllData(params?: {
+    scope?: 'ALL_SURVEILLANCE_DATA' | 'TRACKS_ONLY' | 'FACTORY_RESET';
+    cameraId?: number;
+    purgeRecordings?: boolean;
+    purgeSnapshots?: boolean;
+    purgeEventsAndDetections?: boolean;
+    purgeIncidentsAndEvidence?: boolean;
+    deleteCameras?: boolean;
+  }) {
+    const res = await apiClient.post('/cameras/purge-all-data', {
+      scope: params?.scope || 'ALL_SURVEILLANCE_DATA',
+      camera_id: params?.cameraId,
+      purge_recordings: params?.purgeRecordings ?? true,
+      purge_snapshots: params?.purgeSnapshots ?? true,
+      purge_events_and_detections: params?.purgeEventsAndDetections ?? true,
+      purge_incidents_and_evidence: params?.purgeIncidentsAndEvidence ?? true,
+      delete_cameras: params?.deleteCameras ?? false,
+    });
+    return res.data;
+  },
 };
 
 

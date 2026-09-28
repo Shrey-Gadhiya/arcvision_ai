@@ -13,11 +13,13 @@ import { StorageTelemetry } from '../types';
 import { nvrApi } from '../api/nvr';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
+import { PurgeTrackedModal } from '../components/common/PurgeTrackedModal';
 
 export const StorageTelemetryPage: React.FC = () => {
   const [telemetry, setTelemetry] = useState<StorageTelemetry | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isCleaning, setIsCleaning] = useState<boolean>(false);
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState<boolean>(false);
   const [cleanResult, setCleanResult] = useState<string | null>(null);
 
   const fetchTelemetry = () => {
@@ -82,14 +84,24 @@ export const StorageTelemetryPage: React.FC = () => {
           </Button>
 
           <Button
-            variant="danger"
+            variant="secondary"
             size="sm"
             onClick={handleEnforceRetention}
             disabled={isCleaning}
             className="flex items-center gap-1.5"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            {isCleaning ? 'Pruning...' : 'Enforce Retention Cleanup'}
+            {isCleaning ? 'Pruning...' : 'Enforce Retention'}
+          </Button>
+
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => setIsPurgeModalOpen(true)}
+            className="flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white font-bold"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Purge All Data
           </Button>
         </div>
       </div>
@@ -253,6 +265,15 @@ export const StorageTelemetryPage: React.FC = () => {
           </table>
         </div>
       </div>
+      {/* Tactical Data Purge Modal */}
+      <PurgeTrackedModal
+        isOpen={isPurgeModalOpen}
+        onClose={() => setIsPurgeModalOpen(false)}
+        cameras={telemetry?.per_camera?.map((c) => ({ id: c.camera_id, name: c.camera_name } as any)) || []}
+        onPurgeComplete={() => {
+          fetchTelemetry();
+        }}
+      />
     </div>
   );
 };

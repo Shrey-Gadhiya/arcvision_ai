@@ -261,6 +261,7 @@ class FaceRecognitionService:
         try:
             ts_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
             filename = f"{prefix}_{ts_str}.jpg"
+            os.makedirs(target_dir, exist_ok=True)
             filepath = os.path.join(target_dir, filename)
             cv2.imwrite(filepath, img)
 

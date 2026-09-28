@@ -1,16 +1,20 @@
+import os
 import re
 import json
 import time
 import shutil
+import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete as sa_delete
+from sqlalchemy import select, delete as sa_delete, text
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.event_bus import event_bus
 from app.models.camera import Camera, CameraStatus, StreamType
 from app.models.zone import Zone, Tripwire
 from app.models.incident import Incident
@@ -23,7 +27,10 @@ from app.models.face import FaceRecord
 from app.models.audit import AuditLog
 from app.schemas.all_schemas import CameraResponse, CameraCreate, CameraUpdate
 from app.services.stream_manager import stream_manager
+from app.services.snapshot_manager import snapshot_manager
 from app.api.v1.auth import get_current_user
+
+logger = logging.getLogger("arc_vision.cameras")
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
 
@@ -156,6 +163,15 @@ async def update_camera(
 
     return cam
 
+class PurgeDataRequest(BaseModel):
+    scope: str = "ALL_SURVEILLANCE_DATA"  # "ALL_SURVEILLANCE_DATA", "TRACKS_ONLY", "FACTORY_RESET"
+    camera_id: Optional[int] = None
+    purge_recordings: bool = True
+    purge_snapshots: bool = True
+    purge_events_and_detections: bool = True
+    purge_incidents_and_evidence: bool = True
+    delete_cameras: bool = False
+
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_camera(
     camera_id: int,
@@ -166,36 +182,265 @@ async def delete_camera(
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
 
-    # Stop the live streamer first
-    stream_manager.stop_streamer(camera_id)
+    camera_name = cam.name
 
-    # Explicitly delete all child records safely
-    for model in [
-        ANPRRecord, FaceRecord, RecordingSegment, TrackedSnapshot,
-        Evidence, RuleEvent, DetectionEvent, Zone, Tripwire, Incident
-    ]:
+    # 1. Stop streamer and clear in-memory state
+    try:
+        stream_manager.stop_streamer(camera_id)
+    except Exception as e:
+        logger.warning(f"Error stopping streamer for camera #{camera_id}: {e}")
+
+    try:
+        snapshot_manager.clear_all_tracks(camera_id)
+    except Exception as e:
+        logger.warning(f"Error clearing snapshot tracks for camera #{camera_id}: {e}")
+
+    # 2. Delete media directories on disk for this camera
+    try:
+        cam_rec_dir = Path(settings.RECORDINGS_DIR) / f"cam_{camera_id}"
+        if cam_rec_dir.exists():
+            shutil.rmtree(cam_rec_dir, ignore_errors=True)
+            logger.info(f"Removed recordings directory on disk for Camera #{camera_id}")
+
+        cam_snap_dir = Path(settings.SNAPSHOTS_DIR) / f"cam_{camera_id}"
+        if cam_snap_dir.exists():
+            shutil.rmtree(cam_snap_dir, ignore_errors=True)
+            logger.info(f"Removed snapshots directory on disk for Camera #{camera_id}")
+    except Exception as e:
+        logger.warning(f"Error removing camera files from disk: {e}")
+
+    # 3. Clean database records with raw foreign key protection
+    try:
+        await db.execute(text("PRAGMA foreign_keys = OFF"))
+
+        child_tables = [
+            ("track_observations", "camera_id"),
+            ("case_findings", "camera_id"),
+            ("notifications", "camera_id"),
+            ("ptz_logs", "camera_id"),
+            ("ptz_presets", "camera_id"),
+            ("camera_ai_profiles", "camera_id"),
+            ("anpr_records", "camera_id"),
+            ("face_records", "camera_id"),
+            ("evidences", "camera_id"),
+            ("recording_segments", "camera_id"),
+            ("tracked_snapshots", "camera_id"),
+            ("rule_events", "camera_id"),
+            ("detection_events", "camera_id"),
+            ("tripwires", "camera_id"),
+            ("zones", "camera_id"),
+            ("incidents", "camera_id"),
+        ]
+
+        for table, col in child_tables:
+            try:
+                await db.execute(text(f"DELETE FROM {table} WHERE {col} = :cid"), {"cid": camera_id})
+            except Exception as e:
+                logger.debug(f"Note deleting from {table} for Camera #{camera_id}: {e}")
+
+        # Topologies: clean from_camera_id and to_camera_id
         try:
-            await db.execute(sa_delete(model).where(model.camera_id == camera_id))
+            await db.execute(text("DELETE FROM camera_topologies WHERE from_camera_id = :cid OR to_camera_id = :cid"), {"cid": camera_id})
         except Exception:
             pass
 
-    try:
-        await db.delete(cam)
+        # Global tracks: decouple camera association
+        try:
+            await db.execute(text("UPDATE global_tracks SET current_camera_id = NULL WHERE current_camera_id = :cid"), {"cid": camera_id})
+        except Exception:
+            pass
+
+        # Delete camera row
+        await db.execute(text("DELETE FROM cameras WHERE id = :cid"), {"cid": camera_id})
         await db.commit()
     except Exception as e:
         await db.rollback()
-        # Fallback raw delete
-        from sqlalchemy import text
-        for tbl in ["anpr_records", "face_records", "recording_segments", "tracked_snapshots",
-                    "evidence", "rule_events", "detection_events", "zones", "tripwires", "incidents"]:
-            try:
-                await db.execute(text(f"DELETE FROM {tbl} WHERE camera_id = :cid"), {"cid": camera_id})
-            except Exception:
-                pass
-        await db.execute(text("DELETE FROM cameras WHERE id = :cid"), {"cid": camera_id})
+        logger.error(f"Failed to delete Camera #{camera_id} from database: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error deleting camera: {str(e)}")
+    finally:
+        try:
+            await db.execute(text("PRAGMA foreign_keys = ON"))
+        except Exception:
+            pass
+
+    # 4. Audit Log
+    try:
+        audit = AuditLog(
+            username="operator",
+            user_role="OPERATOR",
+            action="DELETE_CAMERA",
+            resource_type="CAMERA",
+            resource_id=str(camera_id),
+            details_json=json.dumps({"camera_id": camera_id, "camera_name": camera_name, "status": "DELETED"})
+        )
+        db.add(audit)
         await db.commit()
+    except Exception:
+        pass
+
+    # 5. Broadcast real-time deletion over WebSocket
+    try:
+        await event_bus.publish("camera:deleted", {
+            "camera_id": camera_id,
+            "camera_name": camera_name
+        })
+    except Exception:
+        pass
 
     return None
+
+@router.post("/purge-all-data")
+async def purge_all_data(
+    req: PurgeDataRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Comprehensive Tactical Purge:
+    - Removes all media files (recordings, snapshots, evidence) from disk.
+    - Clears all AI detections, rules events, tracked snapshots, incidents, and recordings from DB.
+    - Flushes in-memory tracking states and Kalman filters.
+    - Reclaims disk space and compacts SQLite database with VACUUM.
+    """
+    total_files_deleted = 0
+    total_freed_bytes = 0
+
+    # 1. In-memory flush
+    streamers_reset = stream_manager.clear_all_tracked_objects(req.camera_id)
+    snapshot_manager.clear_all_tracks(req.camera_id)
+
+    # 2. Disk media cleanup
+    if req.camera_id is not None:
+        # Specific camera media purge
+        target_dirs = []
+        if req.purge_recordings:
+            target_dirs.append(Path(settings.RECORDINGS_DIR) / f"cam_{req.camera_id}")
+        if req.purge_snapshots:
+            target_dirs.append(Path(settings.SNAPSHOTS_DIR) / f"cam_{req.camera_id}")
+
+        for p in target_dirs:
+            if p.exists():
+                for root, _, files in os.walk(p):
+                    for f in files:
+                        fp = Path(root) / f
+                        try:
+                            total_freed_bytes += fp.stat().st_size
+                            fp.unlink()
+                            total_files_deleted += 1
+                        except Exception:
+                            pass
+                shutil.rmtree(p, ignore_errors=True)
+    else:
+        # Global purge
+        disk_dirs = []
+        if req.purge_recordings:
+            disk_dirs.append(settings.RECORDINGS_DIR)
+        if req.purge_snapshots:
+            disk_dirs.append(settings.SNAPSHOTS_DIR)
+        if req.purge_incidents_and_evidence:
+            disk_dirs.append(settings.EVIDENCE_DIR)
+
+        for d in disk_dirs:
+            if d.exists():
+                for root, _, files in os.walk(d):
+                    for f in files:
+                        fp = Path(root) / f
+                        try:
+                            total_freed_bytes += fp.stat().st_size
+                            fp.unlink()
+                            total_files_deleted += 1
+                        except Exception:
+                            pass
+                for root, dirs, _ in os.walk(d, topdown=False):
+                    for sub in dirs:
+                        try:
+                            (Path(root) / sub).rmdir()
+                        except Exception:
+                            pass
+            d.mkdir(parents=True, exist_ok=True)
+
+    # 3. Database Purge
+    records_purged = 0
+    try:
+        await db.execute(text("PRAGMA foreign_keys = OFF"))
+
+        tables_to_clear = []
+        if req.purge_events_and_detections:
+            tables_to_clear.extend(["detection_events", "rule_events"])
+        if req.purge_snapshots:
+            tables_to_clear.append("tracked_snapshots")
+        if req.purge_recordings:
+            tables_to_clear.append("recording_segments")
+        if req.purge_incidents_and_evidence:
+            tables_to_clear.extend(["face_records", "anpr_records", "evidences", "incidents", "case_findings", "notifications"])
+        
+        tables_to_clear.extend(["track_observations", "global_tracks", "ptz_logs"])
+
+        if req.camera_id is not None:
+            for t in tables_to_clear:
+                try:
+                    res = await db.execute(text(f"DELETE FROM {t} WHERE camera_id = :cid"), {"cid": req.camera_id})
+                    records_purged += res.rowcount if hasattr(res, "rowcount") and res.rowcount > 0 else 0
+                except Exception:
+                    pass
+        else:
+            for t in tables_to_clear:
+                try:
+                    res = await db.execute(text(f"DELETE FROM {t}"))
+                    records_purged += res.rowcount if hasattr(res, "rowcount") and res.rowcount > 0 else 0
+                except Exception:
+                    pass
+
+        # If factory reset or delete_cameras requested
+        if req.delete_cameras or req.scope == "FACTORY_RESET":
+            # Stop all streamers
+            for c_id in list(stream_manager.get_all_streamers().keys()):
+                stream_manager.stop_streamer(c_id)
+            for t in ["tripwires", "zones", "camera_ai_profiles", "camera_topologies", "ptz_presets", "cameras"]:
+                try:
+                    await db.execute(text(f"DELETE FROM {t}"))
+                except Exception:
+                    pass
+
+        await db.commit()
+
+        # Compact SQLite database
+        try:
+            await db.execute(text("VACUUM"))
+        except Exception:
+            pass
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error purging database records: {e}")
+    finally:
+        try:
+            await db.execute(text("PRAGMA foreign_keys = ON"))
+        except Exception:
+            pass
+
+    # Broadcast event
+    try:
+        await event_bus.publish("data:purged", {
+            "scope": req.scope,
+            "camera_id": req.camera_id,
+            "freed_mb": round(total_freed_bytes / (1024 * 1024), 2),
+            "files_deleted": total_files_deleted,
+            "records_purged": records_purged
+        })
+    except Exception:
+        pass
+
+    return {
+        "status": "SUCCESS",
+        "scope": req.scope,
+        "files_deleted": total_files_deleted,
+        "records_purged": records_purged,
+        "freed_mb": round(total_freed_bytes / (1024 * 1024), 2),
+        "freed_gb": round(total_freed_bytes / (1024 ** 3), 2),
+        "streamers_reset": streamers_reset,
+        "message": f"Successfully purged surveillance data ({total_files_deleted} files removed, {round(total_freed_bytes / (1024*1024), 2)} MB freed)."
+    }
+
 
 @router.post("/{camera_id}/restart")
 async def restart_camera(camera_id: int, db: AsyncSession = Depends(get_db)):

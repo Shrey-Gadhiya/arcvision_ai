@@ -1,10 +1,14 @@
+import os
 import json
+import shutil
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, and_, desc, func, delete
+from sqlalchemy import select, and_, desc, func, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.snapshot import TrackedSnapshot
 from app.models.camera import Camera
@@ -203,7 +207,7 @@ async def clear_all_tracked_objects(
     """
     Tactical Purge: Flushes in-memory tracking IDs, Kalman states, and visual bounding boxes
     across active camera streamers, flushes candidate tracks, clears global tracks,
-    and removes tracked object snapshots from the forensic database.
+    and removes tracked object snapshots from both forensic database AND disk storage.
     """
     streamers_reset = stream_manager.clear_all_tracked_objects(camera_id)
     snapshot_manager.clear_all_tracks(camera_id)
@@ -211,12 +215,43 @@ async def clear_all_tracked_objects(
 
     deleted_count = 0
     if delete_snapshots:
-        del_stmt = delete(TrackedSnapshot)
-        if camera_id is not None:
-            del_stmt = del_stmt.where(TrackedSnapshot.camera_id == camera_id)
-        res = await db.execute(del_stmt)
-        deleted_count = res.rowcount if hasattr(res, "rowcount") else 0
-        await db.commit()
+        # Delete image files from disk
+        try:
+            if camera_id is not None:
+                cam_snap_dir = Path(settings.SNAPSHOTS_DIR) / f"cam_{camera_id}"
+                if cam_snap_dir.exists():
+                    shutil.rmtree(cam_snap_dir, ignore_errors=True)
+            else:
+                for item in os.listdir(settings.SNAPSHOTS_DIR):
+                    p = Path(settings.SNAPSHOTS_DIR) / item
+                    if p.is_dir():
+                        shutil.rmtree(p, ignore_errors=True)
+                    elif p.is_file():
+                        try:
+                            p.unlink()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # Delete database records
+        try:
+            del_stmt = delete(TrackedSnapshot)
+            if camera_id is not None:
+                del_stmt = del_stmt.where(TrackedSnapshot.camera_id == camera_id)
+            res = await db.execute(del_stmt)
+            deleted_count = res.rowcount if hasattr(res, "rowcount") and res.rowcount > 0 else 0
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            try:
+                if camera_id is not None:
+                    await db.execute(text("DELETE FROM tracked_snapshots WHERE camera_id = :cid"), {"cid": camera_id})
+                else:
+                    await db.execute(text("DELETE FROM tracked_snapshots"))
+                await db.commit()
+            except Exception:
+                await db.rollback()
 
     # Log audit trail for security accountability
     try:

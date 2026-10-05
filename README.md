@@ -1,6 +1,6 @@
 # ARC VISION: AI-Based Intelligent Video Analytics Platform for Border Surveillance
 ### Built for SIH26187 (MHA / Sashastra Seema Bal)
-
+YT DEMO VIDEO : https://www.youtube.com/watch?v=I16X21SHMp0
 ARC VISION transforms ordinary legacy, IP, and RTSP CCTV cameras into an autonomous, tactical surveillance grid specifically optimized for remote border perimeters, buffer zones, and checkpoints:
 
 $$\text{RTSP / IP Camera} \longrightarrow \text{Decode} \longrightarrow \text{AI Detection} \longrightarrow \text{Multi-Object Tracking} \longrightarrow \text{Specialized Classifiers (ANPR/Face/Night)} \longrightarrow \text{Zones \& Rules} \longrightarrow \text{Behavior Engine} \longrightarrow \text{Incident Intelligence} \longrightarrow \text{Alerts} \longrightarrow \text{Forensic Evidence (SHA-256)} \longrightarrow \text{Tactical Command Center}$$
